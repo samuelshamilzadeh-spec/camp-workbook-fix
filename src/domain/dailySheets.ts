@@ -100,36 +100,142 @@ export function isDailySheetName(name: string, layout: WorkbookLayout = LAYOUT):
   return layout.dailySheetPattern.test(name);
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface ScanOptions {
+  allSheetNames: string[];
+  /** Sheets an existing queue row points at. Always scanned. */
+  referencedSheets: Iterable<string>;
+  today: Date;
+  hotDaysBack: number;
+  hotDaysForward: number;
+  coldBatchSize: number;
+  /** Rotation position carried in the checkpoint. */
+  cursor: number;
+  layout?: WorkbookLayout;
+}
+
+export interface ScanSelection {
+  /** Scanned every cycle. */
+  hot: string[];
+  /** This cycle's slice of the rotation over everything else. */
+  cold: string[];
+  /** Everything to read this cycle: hot plus cold. */
+  sheets: string[];
+  /** Persist this as the next cursor. */
+  nextCursor: number;
+  /** How many cycles a full sweep of the cold pool takes. */
+  sweepCycles: number;
+  totalDaily: number;
+  /** Daily-pattern sheets whose name did not parse as a date. A naming problem. */
+  unparseable: string[];
+}
+
 /**
- * Bounded scan: the most recent N daily sheets, plus every sheet an existing
- * queue row points at, so a stale queue row on an old date still reconciles.
- * Never every sheet in the workbook.
+ * Tiered scan.
+ *
+ * The office creates daily sheets **in advance** — on 3 August there may already
+ * be sheets for the 4th through the 8th, empty until the day arrives. That rules
+ * out "the N sheets with the latest dates": the latest-dated sheets are the empty
+ * future ones, and today's would be crowded out.
+ *
+ * It also has to cover the whole year, because a staff member can put a keyword
+ * into column B on a sheet from three weeks ago at any time. But reading every
+ * sheet every cycle is a few hundred Graph calls at a five-second cadence, which
+ * is a throttling incident rather than a design.
+ *
+ * So:
+ *   - **hot** — a date window around today, in both directions so tomorrow's
+ *     pre-created sheet is picked up the moment staff start filling it, plus
+ *     every sheet an existing queue row references. Read every cycle.
+ *   - **cold** — everything else, a fixed-size slice per cycle, rotating through
+ *     the checkpointed cursor. Full-year coverage at bounded cost.
+ *
+ * Nothing is ever excluded, only deferred: the guarantee is that every daily
+ * sheet is read within `sweepCycles` changed cycles, and anything recent or
+ * already queued is read immediately.
  */
-export function selectSheetsToScan(
-  allSheetNames: string[],
-  referencedSheets: Iterable<string>,
-  recentCount: number,
-  layout: WorkbookLayout = LAYOUT,
-): string[] {
-  const daily = allSheetNames.filter((name) => isDailySheetName(name, layout));
+export function planScan(options: ScanOptions): ScanSelection {
+  const layout = options.layout ?? LAYOUT;
+  const daily = options.allSheetNames.filter((name) => isDailySheetName(name, layout));
 
-  const dated = daily
-    .map((name) => ({ name, date: layout.parseDailySheetDate(name) }))
-    .filter((entry): entry is { name: string; date: Date } => entry.date !== null)
-    .sort((a, b) => b.date.getTime() - a.date.getTime());
-
-  const selected = new Set(dated.slice(0, Math.max(recentCount, 0)).map((e) => e.name));
-
-  // Sheets whose name we could not parse as a date still match the daily
-  // pattern, so they are real sheets we cannot order. Including the tail of them
-  // is safer than dropping them, and `inspect` surfaces them for a naming fix.
+  const dated: { name: string; date: Date }[] = [];
+  const unparseable: string[] = [];
   for (const name of daily) {
-    if (layout.parseDailySheetDate(name) === null) selected.add(name);
+    const date = layout.parseDailySheetDate(name);
+    if (date) dated.push({ name, date });
+    else unparseable.push(name);
   }
 
-  for (const name of referencedSheets) {
-    if (allSheetNames.includes(name)) selected.add(name);
+  const todayUtc = Date.UTC(
+    options.today.getUTCFullYear(),
+    options.today.getUTCMonth(),
+    options.today.getUTCDate(),
+  );
+  const lower = todayUtc - Math.max(options.hotDaysBack, 0) * DAY_MS;
+  const upper = todayUtc + Math.max(options.hotDaysForward, 0) * DAY_MS;
+
+  const hot = new Set<string>();
+  for (const entry of dated) {
+    const time = entry.date.getTime();
+    if (time >= lower && time <= upper) hot.add(entry.name);
   }
 
-  return [...selected];
+  // Off-season, or a workbook whose sheets are all in the past: the window
+  // catches nothing and only the rotation would run. Fall back to the most
+  // recent sheets that are not in the future, so the job stays responsive to
+  // whatever staff are actually working on.
+  if (hot.size === 0 && dated.length > 0) {
+    const notFuture = dated
+      .filter((entry) => entry.date.getTime() <= todayUtc)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
+    for (const entry of (notFuture.length > 0 ? notFuture : dated).slice(0, 3)) {
+      hot.add(entry.name);
+    }
+  }
+
+  // A queue row's source sheet is scanned however old it is, so a row sitting on
+  // a June date still reconciles every cycle rather than waiting for its turn.
+  for (const name of options.referencedSheets) {
+    if (daily.includes(name)) hot.add(name);
+  }
+
+  // Recent first, so a cold start surfaces the likeliest edits soonest. The
+  // unparseable ones go last: they still get scanned, but they are a naming
+  // problem to fix rather than a population to prioritise.
+  const coldPool = [
+    ...dated
+      .filter((entry) => !hot.has(entry.name))
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .map((entry) => entry.name),
+    ...unparseable.filter((name) => !hot.has(name)),
+  ];
+
+  const cold: string[] = [];
+  let nextCursor = 0;
+
+  if (coldPool.length > 0) {
+    const batch = Math.min(Math.max(options.coldBatchSize, 0), coldPool.length);
+    const start =
+      Number.isFinite(options.cursor) && options.cursor >= 0
+        ? Math.floor(options.cursor) % coldPool.length
+        : 0;
+    for (let i = 0; i < batch; i++) {
+      cold.push(coldPool[(start + i) % coldPool.length]!);
+    }
+    nextCursor = batch > 0 ? (start + batch) % coldPool.length : start;
+  }
+
+  return {
+    hot: [...hot],
+    cold,
+    sheets: [...new Set([...hot, ...cold])],
+    nextCursor,
+    sweepCycles:
+      coldPool.length === 0 || options.coldBatchSize <= 0
+        ? 0
+        : Math.ceil(coldPool.length / options.coldBatchSize),
+    totalDaily: daily.length,
+    unparseable,
+  };
 }

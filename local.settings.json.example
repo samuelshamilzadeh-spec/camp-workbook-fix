@@ -15,7 +15,9 @@
     "SYNC_PHASE": "1",
     "SYNC_DRY_RUN": "true",
     "SYNC_LAYOUT_VERIFIED": "false",
-    "SYNC_RECENT_SHEET_COUNT": "5",
+    "SYNC_HOT_DAYS_BACK": "7",
+    "SYNC_HOT_DAYS_FORWARD": "14",
+    "SYNC_COLD_BATCH_SIZE": "10",
     "SYNC_TIMER_SCHEDULE": "*/5 * * * * *",
     "SYNC_STATE_CONTAINER": "camp-sync-state"
   }

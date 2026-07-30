@@ -16,7 +16,7 @@
 
 import { LAYOUT, QUEUE_SHEET_NAMES } from '../src/config';
 import { columnToIndex, indexToColumn, parseAddress } from '../src/domain/cells';
-import { isDailySheetName, normalizeCamp } from '../src/domain/dailySheets';
+import { isDailySheetName, normalizeCamp, planScan } from '../src/domain/dailySheets';
 import { normalizeStatus, TERMINAL_KEYWORDS, QUEUE_KEYWORDS } from '../src/domain/status';
 import { consoleSink, describeError } from '../src/logging';
 import { createSyncContext } from '../src/sync/context';
@@ -60,6 +60,43 @@ async function main(): Promise<void> {
     );
     out('');
 
+    // --- Scan tiering ------------------------------------------------------
+    const today = new Date();
+    const scan = planScan({
+      allSheetNames: worksheets.map((sheet) => sheet.name),
+      referencedSheets: [],
+      today,
+      hotDaysBack: Number(process.env.SYNC_HOT_DAYS_BACK ?? '7'),
+      hotDaysForward: Number(process.env.SYNC_HOT_DAYS_FORWARD ?? '14'),
+      coldBatchSize: Number(process.env.SYNC_COLD_BATCH_SIZE ?? '10'),
+      cursor: 0,
+    });
+
+    const futureSheets = worksheets
+      .map((sheet) => ({ name: sheet.name, date: LAYOUT.parseDailySheetDate(sheet.name) }))
+      .filter((entry) => entry.date !== null && entry.date.getTime() > today.getTime())
+      .sort((a, b) => b.date!.getTime() - a.date!.getTime());
+
+    out('## Scan tiering (the office creates daily sheets in advance)');
+    out(`  daily sheets total: ${scan.totalDaily}`);
+    out(`  hot (every cycle):  ${scan.hot.length}`);
+    out(`  cold slice / cycle: ${scan.cold.length}`);
+    out(`  full sweep takes:   ${scan.sweepCycles} changed cycles`);
+    out(`  sheets dated after today: ${futureSheets.length}`);
+    if (futureSheets[0]?.date) {
+      const daysAhead = Math.round(
+        (futureSheets[0].date.getTime() - today.getTime()) / 86400000,
+      );
+      out(`  furthest future sheet: ${futureSheets[0].name} (${daysAhead} days ahead)`);
+      out(
+        daysAhead <= Number(process.env.SYNC_HOT_DAYS_FORWARD ?? '14')
+          ? '  OK: inside the hot window, so it is read every cycle.'
+          : '  PROBLEM: beyond the hot window. Raise SYNC_HOT_DAYS_FORWARD to at ' +
+              `least ${daysAhead}, or that sheet waits for its rotation turn.`,
+      );
+    }
+    out('');
+
     // --- Q5: named ranges ---------------------------------------------------
     const names = await workbook.listNames().catch(() => []);
     out('## 5. Named ranges (SyncID column must collide with none of these)');
@@ -70,16 +107,23 @@ async function main(): Promise<void> {
     out('');
 
     // --- Q2, Q3, Q4: per-sheet shape ---------------------------------------
+    // Sample the most recent sheets that are NOT in the future. Taking the last
+    // N by position or by date would sample the pre-created empty ones and
+    // report that the workbook contains no status keywords at all.
     const dailySheets = worksheets
       .map((sheet) => sheet.name)
       .filter((name) => isDailySheetName(name))
-      .slice(-SAMPLE_SHEETS);
+      .map((name) => ({ name, date: LAYOUT.parseDailySheetDate(name) }))
+      .filter((entry) => entry.date === null || entry.date.getTime() <= today.getTime())
+      .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0))
+      .slice(0, SAMPLE_SHEETS)
+      .map((entry) => entry.name);
 
     const statusForms = new Map<string, number>();
     const camps = new Map<string, number>();
     let widestColumn = 0;
 
-    out(`## 2-4. Daily sheet shape (last ${dailySheets.length} sheets)`);
+    out(`## 2-4. Daily sheet shape (${dailySheets.length} most recent non-future sheets)`);
     for (const sheetName of dailySheets) {
       const used = await workbook.getUsedRange(sheetName);
       const { startRow, startColumn, endColumn, endRow } = parseAddress(used.address);

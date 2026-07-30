@@ -5,7 +5,7 @@ import {
   type QueueSheetName,
   type RuntimeConfig,
 } from '../config';
-import { parseDailySheet, selectSheetsToScan } from '../domain/dailySheets';
+import { parseDailySheet, planScan } from '../domain/dailySheets';
 import { parseQueueSheet, assertSyncIdColumnIsClear } from '../domain/queueSheets';
 import { reconcile, type ReconcilePlan } from '../domain/reconcile';
 import { newSyncId } from '../domain/syncId';
@@ -102,14 +102,44 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         }
       }
     }
-    for (const name of previous.lastScannedSheets ?? []) referencedSheets.add(name);
-
     // --- Requirement 7: bounded scan ---------------------------------------
-    const scannedSheets = selectSheetsToScan(
-      sheetNames,
+    //
+    // Hot window every cycle, plus a rotating slice of everything else, so the
+    // whole year is covered without reading every sheet every five seconds.
+    const scan = planScan({
+      allSheetNames: sheetNames,
       referencedSheets,
-      config.recentSheetCount,
-    );
+      today: new Date(),
+      hotDaysBack: config.hotDaysBack,
+      hotDaysForward: config.hotDaysForward,
+      coldBatchSize: config.coldBatchSize,
+      cursor: previous.scanCursor ?? 0,
+    });
+
+    const scannedSheets = scan.sheets;
+
+    log.debug('scan.plan', {
+      count: scannedSheets.length,
+      sheets: scan.hot,
+      skipped: scan.totalDaily - scannedSheets.length,
+      counts: {
+        hot: scan.hot.length,
+        cold: scan.cold.length,
+        totalDaily: scan.totalDaily,
+        sweepCycles: scan.sweepCycles,
+      },
+    });
+
+    if (scan.unparseable.length > 0) {
+      // These still get scanned, on the tail of the rotation. But a daily sheet
+      // whose name will not parse as a date cannot be placed in the hot window,
+      // so it is only ever picked up on its rotation turn.
+      log.warn('scan.unparseable_sheet_names', {
+        count: scan.unparseable.length,
+        sheets: scan.unparseable,
+        reason: 'name matches the daily pattern but does not parse as a date',
+      });
+    }
 
     const daily = [];
     for (const name of scannedSheets) {
@@ -127,6 +157,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         lastSeenModified: metadata.lastModifiedDateTime,
         lastSeenETag: metadata.eTag,
         lastScannedSheets: scannedSheets,
+        scanCursor: scan.nextCursor,
         lastFullCycleAt: new Date().toISOString(),
       };
       await state.write(next);

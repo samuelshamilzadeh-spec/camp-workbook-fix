@@ -196,7 +196,15 @@ export interface RuntimeConfig {
   phase: Phase;
   dryRun: boolean;
   layoutVerified: boolean;
-  recentSheetCount: number;
+  /** Days back from today that are scanned every cycle. */
+  hotDaysBack: number;
+  /**
+   * Days forward from today that are scanned every cycle. The office creates
+   * daily sheets in advance, so this has to cover how far ahead they work.
+   */
+  hotDaysForward: number;
+  /** Sheets pulled from the rotation each cycle, covering the rest of the year. */
+  coldBatchSize: number;
   stateConnectionString: string | undefined;
   stateContainer: string;
 }
@@ -239,7 +247,9 @@ export function loadConfig(): RuntimeConfig {
     // Dry run defaults to ON. Turning writes on has to be a deliberate act.
     dryRun: boolEnv('SYNC_DRY_RUN', true),
     layoutVerified: boolEnv('SYNC_LAYOUT_VERIFIED', false),
-    recentSheetCount: Number(env('SYNC_RECENT_SHEET_COUNT') ?? '5'),
+    hotDaysBack: Number(env('SYNC_HOT_DAYS_BACK') ?? '7'),
+    hotDaysForward: Number(env('SYNC_HOT_DAYS_FORWARD') ?? '14'),
+    coldBatchSize: Number(env('SYNC_COLD_BATCH_SIZE') ?? '10'),
     stateConnectionString:
       env('AZURE_STORAGE_CONNECTION_STRING') ?? env('AzureWebJobsStorage'),
     stateContainer: env('SYNC_STATE_CONTAINER') ?? 'camp-sync-state',

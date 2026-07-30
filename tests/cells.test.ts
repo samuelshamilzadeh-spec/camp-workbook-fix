@@ -10,7 +10,6 @@ import {
 import { assertNoFormulas, encodeSheet } from '../src/graph/workbook';
 import { isSyncId, newSyncId, normalizeSyncId } from '../src/domain/syncId';
 import { formatGroupHeader, parseGroupHeader } from '../src/domain/queueSheets';
-import { selectSheetsToScan } from '../src/domain/dailySheets';
 
 describe('column arithmetic', () => {
   it('round-trips single and multi-letter columns', () => {
@@ -112,37 +111,6 @@ describe('group headers', () => {
   it('is not fooled by a patient row', () => {
     expect(parseGroupHeader('Smith')).toBeUndefined();
     expect(parseGroupHeader('')).toBeUndefined();
-  });
-});
-
-describe('selectSheetsToScan', () => {
-  const sheets = [
-    '2026-07-28',
-    '2026-07-29',
-    '2026-07-30',
-    '2026-06-01',
-    'Missing Info',
-    'United Refresh',
-  ];
-
-  it('takes the most recent N daily sheets and never the whole workbook', () => {
-    const selected = selectSheetsToScan(sheets, [], 2);
-    expect(new Set(selected)).toEqual(new Set(['2026-07-30', '2026-07-29']));
-  });
-
-  it('includes any sheet an existing queue row points at', () => {
-    const selected = selectSheetsToScan(sheets, ['2026-06-01'], 2);
-    expect(selected).toContain('2026-06-01');
-  });
-
-  it('ignores referenced sheets that do not exist', () => {
-    expect(selectSheetsToScan(sheets, ['2020-01-01'], 1)).not.toContain('2020-01-01');
-  });
-
-  it('never selects queue or known non-daily sheets', () => {
-    const selected = selectSheetsToScan(sheets, [], 10);
-    expect(selected).not.toContain('Missing Info');
-    expect(selected).not.toContain('United Refresh');
   });
 });
 

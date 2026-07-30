@@ -26,6 +26,11 @@ export interface SyncState {
   lastSelfWriteBy?: string;
   /** Daily sheets touched last cycle, used to bound the next scan. */
   lastScannedSheets?: string[];
+  /**
+   * Rotation position in the cold pool, so successive cycles sweep the rest of
+   * the year rather than re-reading the same slice.
+   */
+  scanCursor?: number;
   /** ISO timestamp of the last cycle that actually opened the workbook. */
   lastFullCycleAt?: string;
 }

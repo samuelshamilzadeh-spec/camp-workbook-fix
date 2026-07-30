@@ -40,6 +40,7 @@ build brief and marked `UNVERIFIED`. The guesses that matter:
 | Assumption | Current guess | How to confirm |
 |---|---|---|
 | Daily sheet naming | a date, `2026-07-30` or `7/30/2026` | `npm run inspect` prints every sheet name |
+| How far ahead the office pre-creates sheets | 14 days (`SYNC_HOT_DAYS_FORWARD`) | ask the office; `inspect` shows the furthest future sheet |
 | Daily header row / first data row | row 1 / row 2 | `inspect` guesses the header row per sheet |
 | Camp name column | C ("believed to be", per the brief) | `inspect` prints the distinct values in C |
 | Whether camp names need normalizing | casing and whitespace only | `inspect` prints them; look for aliases |
@@ -227,7 +228,7 @@ timer (5s)
        └─ changed
             ├─ open a workbook session (non-persisted while read-only)
             ├─ read the four queue sheets' usedRange
-            ├─ pick sheets to scan: most recent N + any referenced by a queue row
+            ├─ pick sheets to scan: hot window + queue-referenced + cold slice
             ├─ read those daily sheets' usedRange
             ├─ reconcile → a list of intents
             └─ log the plan (Phase 1) / apply it (Phase 2+)
@@ -247,6 +248,25 @@ Design points worth not undoing:
   excluded automatically. The rejected alternative, "stamp any row whose
   identifying fields are populated", fails on exactly this population: a Missing
   Info row is missing a field by definition.
+- **Tiered scan, because the office creates sheets in advance.** On 3 August
+  there may already be sheets out to the 8th, empty until their day arrives. So
+  "the N sheets with the latest dates" is wrong — the latest-dated sheets are the
+  empty future ones and today's gets crowded out. Instead:
+
+  | Tier | What | When |
+  |---|---|---|
+  | hot | a date window around today (`SYNC_HOT_DAYS_BACK` / `SYNC_HOT_DAYS_FORWARD`), plus every sheet an existing queue row points at | every cycle |
+  | cold | everything else, `SYNC_COLD_BATCH_SIZE` sheets at a time, rotating on a checkpointed cursor | over successive cycles |
+
+  Nothing is excluded, only deferred. A staff member flagging a row on a
+  three-week-old sheet is still picked up — on that sheet's rotation turn rather
+  than instantly. With the defaults and a ~70-sheet season that is a full sweep
+  every ~6 changed cycles; anything recent or already queued is immediate.
+
+  Reading all 200-360 sheets of a year every cycle would be a throttling incident
+  at a five-second cadence, which is what the rotation exists to avoid. Raise
+  `SYNC_COLD_BATCH_SIZE` to shorten the sweep; it costs one Graph call per sheet
+  per cycle, one-for-one.
 - **Reads are cheap, writes are expensive.** One `usedRange` call per sheet, then
   filter in memory. Never a targeted read per row, never a write per cell.
 - **423 and 409 are expected**, not errors — a staff member has the file open in
