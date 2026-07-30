@@ -74,12 +74,69 @@ Two consequences for the implementation:
 - A new row's 17 columns are written in a single range write, so a row is never
   momentarily half-populated where a human could see it.
 
+## 5. Repeat visits: every visit is a row, but a fix is typed once
+
+A patient seen twice gets two rows on the daily sheets and two on the queue —
+two visits, two insurance entries, and the office wants both visible. But
+resolving the same missing information twice is wasted work.
+
+Measured on the live workbook:
+
+    queued visits                              1,061
+    distinct patients                            836
+    patients appearing more than once             148   (one appears 7 times)
+    visits belonging to a repeat patient          373
+    duplicate effort                              21% of the queue
+
+So two identifiers, doing different jobs:
+
+| | Scope | Purpose |
+|---|---|---|
+| `SyncID` | one visit row | links a queue row to the exact daily row it came from |
+| `PatientID` | one person | lets a fix fan out to that person's other visits |
+
+**Patient key: Last Name + First Name + Date of Birth + Camp.**
+
+Camp was the office's addition and it is free — on the live data it yields the
+same 836 people as name+DOB alone, splitting nobody, while ruling out two
+children who genuinely share a name and a birthday. Name alone was never safe:
+14 name-pairs in this workbook already cover more than one date of birth.
+
+A row with no surname, first name or DOB gets no key and matches nothing. Only
+1 of 1,061 rows is in that state. The failure directions are deliberately
+asymmetric: a typo splits one patient into two and the office does the work
+twice, exactly as today; a bad merge would put one child's insurance on
+another's record.
+
+### What propagates, and what does not
+
+A queue value that differs from its own source row is a staff edit — someone
+typed it just now. That value fans out to the patient's other visits. Anything
+else is left alone.
+
+**Two visits edited to different values is not resolved.** Nothing is written
+and the conflict is reported. This is not a corner case: 72 of the 148 repeat
+patients already disagree on some filled field.
+
+    36  Phone Number        12  Insurance ID #      10  State
+    16  Billing Address     11  City                 5  Zip Code
+    12  Insurance Carrier                            1  Medicaid #
+
+A pre-existing disagreement where nobody has edited anything stays untouched —
+it is history, not an instruction.
+
+There are also **67 blank cells** that a sibling visit could fill. Whether to
+fill those automatically is still open; it is a separate, more aggressive
+behaviour than propagating an edit.
+
 ## Still open
 
 - **Rebuild vs append.** The queue tabs carry the old mirror layout. Building
   the new structure means rewriting them, but they are live and being edited.
   Adoption is what makes an in-place rebuild survivable; the order of operations
   still needs deciding.
+- **Auto-filling blanks from a sibling visit** (67 cells today). Propagating an
+  edit is unambiguous; back-filling from history is a judgement call.
 - **The concurrency test** has not been run. It should be, before writes are
   enabled — staff are in the file continuously, which makes the test realistic
   rather than theoretical.
