@@ -1,0 +1,36 @@
+{
+  "name": "camp-workbook-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Azure Function that keeps the camp status queue sheets in sync with the daily visit sheets",
+  "main": "dist/src/functions/*.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prestart": "npm run clean && npm run build",
+    "start": "func start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "inspect": "tsx scripts/inspect-workbook.ts",
+    "backfill": "tsx scripts/phase0-backfill.ts",
+    "reconcile": "tsx scripts/run-reconcile.ts",
+    "concurrency-test": "tsx scripts/concurrency-test.ts"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.1",
+    "@azure/identity": "^4.4.1",
+    "@azure/storage-blob": "^12.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.1"
+  }
+}

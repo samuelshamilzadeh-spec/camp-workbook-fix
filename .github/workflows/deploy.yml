@@ -1,0 +1,74 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for the OIDC login below, so there is no publish profile secret to leak.
+  id-token: write
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Ship runtime deps only. devDependencies roughly triple the package.
+      - name: Prune to production dependencies
+        run: npm prune --omit=dev
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: function-app
+          path: |
+            dist/
+            node_modules/
+            host.json
+            package.json
+            package-lock.json
+          retention-days: 5
+
+  deploy:
+    # Deploys only from main. A PR gets the build and the tests, never the deploy.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: function-app
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to the Function App
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+          package: .
+          # The build already ran here; do not rebuild on the Kudu side.
+          scm-do-build-during-deployment: false
+          enable-oryx-build: false

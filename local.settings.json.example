@@ -1,0 +1,22 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "FUNCTIONS_EXTENSION_VERSION": "~4",
+
+    "AZURE_TENANT_ID": "",
+    "AZURE_CLIENT_ID": "",
+    "AZURE_CLIENT_SECRET": "",
+
+    "GRAPH_SITE_ID": "",
+    "GRAPH_ITEM_ID": "",
+
+    "SYNC_PHASE": "1",
+    "SYNC_DRY_RUN": "true",
+    "SYNC_LAYOUT_VERIFIED": "false",
+    "SYNC_RECENT_SHEET_COUNT": "5",
+    "SYNC_TIMER_SCHEDULE": "*/5 * * * * *",
+    "SYNC_STATE_CONTAINER": "camp-sync-state"
+  }
+}

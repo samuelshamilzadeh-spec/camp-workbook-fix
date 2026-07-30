@@ -1,0 +1,142 @@
+import {
+  LAYOUT,
+  QUEUE_COLUMNS,
+  type QueueColumn,
+  type QueueSheetName,
+  type WorkbookLayout,
+} from '../config';
+import { cellFromGrid, columnToIndex, isBlank, offsetColumn, parseAddress } from './cells';
+import { normalizeCamp } from './dailySheets';
+import { normalizeSyncId } from './syncId';
+import type { RangeData } from '../graph/workbook';
+
+export interface QueueRow {
+  sheet: QueueSheetName;
+  row: number;
+  syncId: string | undefined;
+  values: Partial<Record<QueueColumn, unknown>>;
+  /** Camp group this row currently sits under, from the nearest header above it. */
+  camp: string | undefined;
+}
+
+export interface CampGroup {
+  camp: string;
+  /** 1-based row of the `CampName - N patients` header. */
+  headerRow: number;
+  declaredCount: number;
+  /** Rows belonging to this group, in sheet order. */
+  rows: QueueRow[];
+}
+
+export interface ParsedQueueSheet {
+  sheet: QueueSheetName;
+  rows: QueueRow[];
+  groups: CampGroup[];
+  /** Last used row on the sheet, for append positioning. */
+  lastRow: number;
+}
+
+/** `Camp Ramah - 12 patients` */
+const HEADER_PATTERN = /^\s*(.+?)\s*-\s*(\d+)\s+patients?\s*$/i;
+
+export function formatGroupHeader(camp: string, count: number): string {
+  return `${camp} - ${count} patient${count === 1 ? '' : 's'}`;
+}
+
+export function parseGroupHeader(value: unknown): { camp: string; count: number } | undefined {
+  if (isBlank(value)) return undefined;
+  const match = HEADER_PATTERN.exec(String(value));
+  if (!match) return undefined;
+  return { camp: match[1]!.trim(), count: Number(match[2]) };
+}
+
+/**
+ * Parses one queue sheet's usedRange into rows and camp groups.
+ *
+ * A row is a data row when it carries a SyncID or any patient field; a row whose
+ * first column parses as `Camp - N patients` is a group header. Blank spacer
+ * rows are ignored. Instruction blocks above `firstDataRow` are never examined.
+ */
+export function parseQueueSheet(
+  sheet: QueueSheetName,
+  used: RangeData,
+  layout: WorkbookLayout = LAYOUT,
+): ParsedQueueSheet {
+  const { startRow, startColumn } = parseAddress(used.address);
+  const first = layout.queue.firstColumn;
+
+  const rows: QueueRow[] = [];
+  const groups: CampGroup[] = [];
+  let currentGroup: CampGroup | undefined;
+
+  const firstRow = Math.max(startRow, layout.queue.firstDataRow);
+  const lastRow = startRow + used.values.length - 1;
+
+  for (let row = firstRow; row <= lastRow; row++) {
+    const cell = (column: string): unknown =>
+      cellFromGrid(used.values, startRow, startColumn, row, column);
+
+    const header = parseGroupHeader(cell(first));
+    if (header) {
+      currentGroup = {
+        camp: header.camp,
+        headerRow: row,
+        declaredCount: header.count,
+        rows: [],
+      };
+      groups.push(currentGroup);
+      continue;
+    }
+
+    const values: Partial<Record<QueueColumn, unknown>> = {};
+    let hasValue = false;
+    QUEUE_COLUMNS.forEach((column, index) => {
+      const value = cell(offsetColumn(first, index));
+      values[column] = value;
+      if (!isBlank(value)) hasValue = true;
+    });
+
+    const syncId = normalizeSyncId(cell(layout.queue.syncIdColumn));
+    if (!hasValue && !syncId) continue;
+
+    const queueRow: QueueRow = {
+      sheet,
+      row,
+      syncId,
+      values,
+      camp: currentGroup?.camp,
+    };
+    rows.push(queueRow);
+    currentGroup?.rows.push(queueRow);
+  }
+
+  return { sheet, rows, groups, lastRow };
+}
+
+/** Column letter on a queue sheet for a given queue column. */
+export function queueColumnLetter(
+  column: QueueColumn,
+  layout: WorkbookLayout = LAYOUT,
+): string {
+  const index = QUEUE_COLUMNS.indexOf(column);
+  if (index === -1) throw new Error(`Not a queue column: ${column}`);
+  return offsetColumn(layout.queue.firstColumn, index);
+}
+
+export function lastQueueColumnLetter(layout: WorkbookLayout = LAYOUT): string {
+  return offsetColumn(layout.queue.firstColumn, QUEUE_COLUMNS.length - 1);
+}
+
+/**
+ * Sanity check for the SyncID column placement: it must sit clear of the data
+ * columns on every sheet, not just look far away.
+ */
+export function assertSyncIdColumnIsClear(layout: WorkbookLayout = LAYOUT): void {
+  const lastData = columnToIndex(lastQueueColumnLetter(layout));
+  if (columnToIndex(layout.queue.syncIdColumn) <= lastData) {
+    throw new Error(
+      `Queue SyncID column ${layout.queue.syncIdColumn} overlaps the data columns ` +
+        `(which end at ${lastQueueColumnLetter(layout)}).`,
+    );
+  }
+}

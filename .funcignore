@@ -1,0 +1,13 @@
+*.js.map
+.git*
+.github/
+.vscode/
+docs/
+local.settings.json
+node_modules/@types/
+scripts/
+tests/
+tsconfig.json
+vitest.config.ts
+.env
+.env.example

@@ -1,0 +1,20 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Azure Functions local state — contains the client secret. Never commit.
+local.settings.json
+.env
+.env.*
+!.env.example
+
+# Local inspection output. May contain patient data — never commit, never leave
+# outside a BAA-covered location. See README "Handling workbook copies".
+inspect-output/
+*.xlsx
+*.xlsm
+*.csv
+
+.vscode/
+.idea/
+.DS_Store
