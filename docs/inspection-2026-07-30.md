@@ -106,6 +106,12 @@ The four canonical names do not exist. Present instead:
 **This blocks Phase 2** and needs the office to say which tab is the live queue
 for each status, and where Verify Insurance rows go today.
 
+## Performance — resolved
+
+Superseded by the section below. Kept for the record because the diagnosis
+matters: the first numbers here were measured session-less, which is what made
+the workbook look unusably slow.
+
 ## Reliability — the significant risk
 
 Per-sheet `usedRange` read latency, 28 successful reads at concurrency 4:
@@ -127,3 +133,52 @@ Two consequences:
 Both may improve once the mirror formulas are removed — the formula load is what
 makes the file slow, and that is the project\'s whole purpose. That is a reason
 to sequence the cutover carefully, not a reason to assume the problem away.
+
+
+---
+
+# Update, 2026-07-30 evening: performance resolved
+
+Two changes landed between the measurements above and these: the office stripped
+the mirror formulas and removed unused content, and the code stopped opening a
+workbook session per cycle.
+
+| | first measurement | now |
+|---|---|---|
+| file size | 3.70 MB | **1.87 MB** |
+| session-less single sheet read | 8300 ms | 1504 ms |
+| per-sheet read, p50 | 6900 ms | **94 ms** |
+| full 46-sheet scan | 66 s | **0.7 s** |
+| warm scan (the real per-cycle cost) | — | **0.6 s** |
+| sheets failing with 501 | 18 of 46 | **0** |
+
+**0.6 s per cycle against a 5 s budget.** The earlier conclusion — that a
+five-second timer could not work against this workbook — no longer holds, and
+the hot/cold tiering stays an unused fallback for when the workbook accumulates
+more seasons.
+
+Which of the two changes did what: the session accounts for most of it (66 s to
+9.3 s on its own, before any cleanup), the cleanup for the rest (9.3 s to 0.7 s).
+The formula load was never the cause of the read latency — the cost was the
+Excel service opening the workbook once per request.
+
+Also resolved:
+
+- **The `400 BadRequest` on `Ineligible & Inactive` is gone.** It now reads in
+  91 ms. That was the removed content, not a range-size limit.
+- **`_Feed` has been deleted** — 13,801 rows, 421 live formulas, very hidden.
+  Nothing broke, which answers what it drove: nothing.
+- `Dont Take Ins (old)` and `Missing Ins info` are now hidden rather than
+  deleted, and remain in IGNORED_TABS.
+
+Queue tabs as they now stand:
+
+    Ineligible & Inactive    A1:T1221
+    Not Accepted (trailing space)  A1:Q400
+    Missing Info (New)       A1:Q230
+    United Refuah            A1:S23
+    Verify Insurance         STILL ABSENT — 270 rows need it
+
+Those four carry the old mirror layout, not the queue layout in the brief, so
+Phase 2 has to decide whether to rebuild them in place or create new ones
+alongside.
