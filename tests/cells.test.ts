@@ -7,7 +7,7 @@ import {
   parseAddress,
   rangeAddress,
 } from '../src/domain/cells';
-import { assertNoFormulas, encodeSheet } from '../src/graph/workbook';
+import { assertNoFormulas, encodeSheet, worksheetPath } from '../src/graph/workbook';
 import { isSyncId, newSyncId, normalizeSyncId } from '../src/domain/syncId';
 import { formatGroupHeader, parseGroupHeader, resolveSheetName } from '../src/domain/queueSheets';
 
@@ -133,6 +133,42 @@ describe('write safety', () => {
 describe('encodeSheet', () => {
   it('quotes the name and doubles inner apostrophes', () => {
     expect(encodeSheet("Bob's sheet")).toBe("('Bob''s%20sheet')");
+  });
+});
+
+describe('worksheetPath', () => {
+  const WB = '/drives/abc/items/xyz/workbook';
+
+  // The regression: call sites wrote `/worksheets/${encodeSheet(name)}`, giving
+  // `/worksheets/('Name')`. Graph rejects the empty segment with a 400 whose
+  // message points at the URL, not the sheet — easy to misread as a workbook
+  // problem. Every read and write went through it, so nothing worked.
+  it('never produces an empty path segment', () => {
+    for (const name of [
+      'Ineligible & Inactive',
+      'United Refuah',
+      'Not Accepted ',
+      'Missing Info (New)',
+      'July 30, 2026',
+      "Bob's sheet",
+    ]) {
+      const path = worksheetPath(WB, name);
+      expect(path).not.toContain('/(');
+      expect(path).not.toContain('//');
+      expect(path).toContain("/worksheets('");
+    }
+  });
+
+  it('builds the documented OData shape', () => {
+    expect(worksheetPath(WB, 'July 30, 2026')).toBe(
+      "/drives/abc/items/xyz/workbook/worksheets('July%2030%2C%202026')",
+    );
+  });
+
+  it('encodes an ampersand in the sheet name', () => {
+    expect(worksheetPath(WB, 'Ineligible & Inactive')).toBe(
+      "/drives/abc/items/xyz/workbook/worksheets('Ineligible%20%26%20Inactive')",
+    );
   });
 });
 

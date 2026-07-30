@@ -205,7 +205,7 @@ export class Workbook {
   async getUsedRange(sheetName: string): Promise<RangeData> {
     return this.withSession(() =>
       this.graph.request<RangeData>(
-        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/usedRange(valuesOnly=true)?$select=address,rowCount,columnCount,values`,
+        `${worksheetPath(this.workbookPath, sheetName)}/usedRange(valuesOnly=true)?$select=address,rowCount,columnCount,values`,
         { headers: this.sessionHeaders },
       ),
     );
@@ -214,7 +214,7 @@ export class Workbook {
   async getRange(sheetName: string, address: string): Promise<RangeData> {
     return this.withSession(() =>
       this.graph.request<RangeData>(
-        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')?$select=address,rowCount,columnCount,values`,
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')?$select=address,rowCount,columnCount,values`,
         { headers: this.sessionHeaders },
       ),
     );
@@ -229,7 +229,7 @@ export class Workbook {
     assertNoFormulas(values, sheetName, address);
     await this.withSession(() =>
       this.graph.request(
-        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')`,
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')`,
         { method: 'PATCH', body: { values }, headers: this.sessionHeaders },
       ),
     );
@@ -237,14 +237,14 @@ export class Workbook {
 
   async setFill(sheetName: string, address: string, color: string): Promise<void> {
     await this.graph.request(
-      `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
+      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
       { method: 'PATCH', body: { color }, headers: this.sessionHeaders },
     );
   }
 
   async clearFill(sheetName: string, address: string): Promise<void> {
     await this.graph.request(
-      `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
+      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
       { method: 'POST', body: {}, headers: this.sessionHeaders },
     );
   }
@@ -257,7 +257,26 @@ export class Workbook {
   }
 }
 
-/** Excel sheet names in a Graph path are quoted, and inner quotes are doubled. */
+/**
+ * Builds the worksheet path segment: `.../workbook/worksheets('Sheet%20Name')`.
+ *
+ * This returns the whole segment, `worksheets(...)` included, rather than just
+ * the parenthesised key. An earlier version returned only `('Name')` and every
+ * call site wrote `/worksheets/${encodeSheet(name)}`, which produces
+ * `/worksheets/('Name')` — an empty path segment between the slash and the
+ * paren. Graph rejects that with a 400 "Empty segment encountered in request
+ * URL", which reads like a problem with the workbook rather than with the URL.
+ *
+ * Keeping the two halves together means they cannot be joined wrongly.
+ */
+export function worksheetPath(workbookPath: string, sheetName: string): string {
+  return `${workbookPath}/worksheets${encodeSheet(sheetName)}`;
+}
+
+/**
+ * The parenthesised OData key for a sheet name. Excel quotes sheet names and
+ * doubles any inner apostrophe. Prefer `worksheetPath` — see above.
+ */
 export function encodeSheet(sheetName: string): string {
   return `('${encodeURIComponent(sheetName.replace(/'/g, "''"))}')`;
 }
