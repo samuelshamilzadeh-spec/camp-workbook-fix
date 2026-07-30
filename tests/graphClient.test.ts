@@ -59,7 +59,7 @@ describe('GraphClient retries', () => {
     expect(delays).toEqual([3000]);
   });
 
-  it('does not retry a 403, which means the Sites.Selected grant is wrong', async () => {
+  it('does not retry a 403, which means admin consent has not been granted', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(403, { error: { code: 'accessDenied' } }));
     const client = new GraphClient(tokens, log, {
       fetchImpl: fetchImpl as unknown as typeof fetch,

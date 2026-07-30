@@ -15,10 +15,16 @@ export interface TokenProvider {
  * App-only auth. In Azure prefer a managed identity so there is no secret to
  * rotate; locally a client secret is the only option.
  *
- * Either way the app registration carries `Sites.Selected` and nothing broader,
- * and the site-level grant is what actually scopes access to the one site
- * holding the workbook. `Sites.Selected` with no site grant can read nothing,
- * which is the desired default.
+ * The app registration carries `Files.ReadWrite.All`, chosen over the narrower
+ * `Sites.Selected` the build brief called for. See "Scope decision, recorded" in
+ * the README.
+ *
+ * The consequence for anyone working in this file: the credential can reach
+ * every file in the tenant, so nothing at the permission layer stops a bug from
+ * writing to the wrong workbook. The only thing that scopes this process to one
+ * file is `GRAPH_ITEM_ID` and the fact that `Workbook` is constructed with a
+ * single item id. Do not add a code path that takes an item id from anywhere
+ * else — a queue row, a sheet cell, a request body.
  */
 export function createCredential(config: RuntimeConfig): TokenCredential {
   if (config.useManagedIdentity) {

@@ -138,36 +138,54 @@ redacted — the default is safe.
 
 Two things.
 
-### 1. An Entra app registration with `Sites.Selected`
+### 1. An Entra app registration with `Files.ReadWrite.All`
 
 - A new app registration (suggested name: `camp-workbook-sync`).
-- Microsoft Graph **application** permission `Sites.Selected`, with admin
-  consent. Explicitly **not** `Files.ReadWrite.All` or `Sites.ReadWrite.All` —
-  this workbook holds patient data and access must be scoped to one site.
-- A site-level grant of `write` on the single SharePoint site holding the
-  workbook. `Sites.Selected` grants nothing by itself; the grant is a separate
-  call an admin makes once:
+- Microsoft Graph **application** permission `Files.ReadWrite.All`, with admin
+  consent:
 
-  ```http
-  POST https://graph.microsoft.com/v1.0/sites/{siteId}/permissions
-  {
-    "roles": ["write"],
-    "grantedToIdentities": [
-      { "application": { "id": "{appClientId}", "displayName": "camp-workbook-sync" } }
-    ]
-  }
+  ```bash
+  az ad sp show --id 00000003-0000-0000-c000-000000000000 \
+    --query "appRoles[?value=='Files.ReadWrite.All'].{id:id,value:value}" -o table
+
+  az ad app permission add --id {appClientId} \
+    --api 00000003-0000-0000-c000-000000000000 \
+    --api-permissions {roleId}=Role
+
+  az ad app permission admin-consent --id {appClientId}
   ```
 
-  Verify with `GET /sites/{siteId}/permissions`.
 - Either a client secret (note the expiry and diarise the rotation) **or**,
   preferred, no secret at all: assign a user-assigned managed identity to the
-  Function App and grant `Sites.Selected` to that identity instead. The code
+  Function App and grant the permission to that identity instead. The code
   supports both — set `AZURE_USE_MANAGED_IDENTITY=true`.
 
-A useful check that the scoping is right: with the grant on the correct site,
-requests to any *other* site must return 403. `GraphClient` deliberately does not
-retry a 403, so a scoping mistake fails loudly on the first cycle instead of
-looking like a transient error.
+#### Scope decision, recorded
+
+The build brief specified `Sites.Selected` scoped to the single SharePoint site,
+and explicitly ruled out `Files.ReadWrite.All`. **That was overridden
+deliberately** in favour of the broader permission, to avoid the separate
+site-level grant step. This note exists so the next person reads it as a decision
+rather than an oversight.
+
+What that means in practice:
+
+- The credential can read and write **every file in every OneDrive and SharePoint
+  site in the tenant**, not just this workbook. The code only ever touches the one
+  `driveItem` in `GRAPH_ITEM_ID`, but nothing at the permission layer enforces
+  that.
+- A leaked or mis-scoped client secret is therefore a tenant-wide incident, not a
+  single-site one. Treat secret rotation and the Function App's access
+  restrictions as load-bearing controls, since the permission scope no longer is.
+- Prefer the managed identity over a client secret here. With this permission
+  breadth, removing the secret entirely is worth more than it would have been
+  under `Sites.Selected`.
+- Narrowing later is a permission change and a one-line grant, with **no code
+  change** — the Graph calls are identical under either permission. If the
+  security posture is revisited, see `docs/scope-narrowing.md`.
+
+`GraphClient` deliberately does not retry a 403, so an auth misconfiguration
+still fails loudly on the first cycle instead of looking like a transient error.
 
 ### 2. A resource group with a Consumption-plan Function App
 
