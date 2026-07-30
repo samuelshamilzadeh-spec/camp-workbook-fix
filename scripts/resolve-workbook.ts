@@ -189,6 +189,15 @@ if (require.main === module) {
           'not finished propagating. Check appRoleAssignments on the service principal.',
       );
     }
+    if (/AADSTS7000215|invalid_client/i.test(String((error as Error).message))) {
+      console.error(
+        'The tenant and client id were accepted, so only the secret is wrong. Usual causes:\n' +
+          '  - AZURE_CLIENT_SECRET holds the secret ID rather than the secret VALUE\n' +
+          '  - a later `az ad app credential reset` without --append invalidated it\n' +
+          '  - the secret was written to .env more than once, and the wrong line won\n' +
+          '  - it was created seconds ago and has not propagated yet',
+      );
+    }
     if ((error as { statusCode?: number }).statusCode === 404) {
       console.error(
         'A 404 means the URL did not resolve to a file. Copy it from the browser ' +
