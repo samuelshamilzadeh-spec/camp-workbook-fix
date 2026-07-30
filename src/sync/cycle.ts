@@ -1,13 +1,18 @@
 import {
   LAYOUT,
   QUEUE_SHEET_NAMES,
+  QUEUE_SHEET_TABS,
   assertLayoutVerified,
   type QueueSheetName,
   type RuntimeConfig,
 } from '../config';
 import { mapWithConcurrency } from '../domain/concurrency';
 import { parseDailySheet, planScan } from '../domain/dailySheets';
-import { parseQueueSheet, assertSyncIdColumnIsClear } from '../domain/queueSheets';
+import {
+  parseQueueSheet,
+  assertSyncIdColumnIsClear,
+  resolveSheetName,
+} from '../domain/queueSheets';
 import { reconcile, type ReconcilePlan } from '../domain/reconcile';
 import { newSyncId } from '../domain/syncId';
 import { describeError, type Logger } from '../logging';
@@ -86,14 +91,34 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   try {
     const worksheets = await workbook.listWorksheets();
     const sheetNames = worksheets.map((sheet) => sheet.name);
-    const queueNames = (deps.queueSheetNames ?? QUEUE_SHEET_NAMES).filter((name) =>
-      sheetNames.includes(name),
-    );
+    // Each queue's canonical name maps to whatever the tab is actually called:
+    // `Missing Info (New)`, and `Not Accepted ` with a trailing space. Exact
+    // matching reported both as absent, so two of the four queues were silently
+    // never read.
+    const wanted = deps.queueSheetNames ?? QUEUE_SHEET_NAMES;
+    const bindings: { status: QueueSheetName; tab: string }[] = [];
+    const missingTabs: QueueSheetName[] = [];
+
+    for (const status of wanted) {
+      const tab = resolveSheetName(QUEUE_SHEET_TABS[status] ?? status, sheetNames);
+      if (tab) bindings.push({ status, tab });
+      else missingTabs.push(status);
+    }
+
+    if (missingTabs.length > 0) {
+      // A queue with no tab cannot be populated, and its patients go nowhere.
+      // Verify Insurance is in this state today: 271 rows and no sheet.
+      log.warn('queue.sheet_missing', {
+        count: missingTabs.length,
+        sheets: missingTabs,
+        reason: 'no matching tab in the workbook; these rows have nowhere to go',
+      });
+    }
 
     // Queue sheets first: they tell us which daily sheets a bounded scan must
     // include beyond the most recent N.
-    const queues = await mapWithConcurrency(queueNames, config.readConcurrency, async (name) =>
-      parseQueueSheet(name, await workbook.getUsedRange(name)),
+    const queues = await mapWithConcurrency(bindings, config.readConcurrency, async (binding) =>
+      parseQueueSheet(binding.status, await workbook.getUsedRange(binding.tab)),
     );
 
     const referencedSheets = new Set<string>();

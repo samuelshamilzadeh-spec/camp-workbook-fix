@@ -248,6 +248,17 @@ export function isAmbiguous(outcome: StatusOutcome): boolean {
   if (matched.length < 2) return false;
 
   const hasTerminal = matched.some((k) => TERMINAL_KEYWORDS.includes(k));
+
+  // A cell matching `no insurance on file` also matches `no insurance`, and the
+  // two route differently ON PURPOSE — the specific rule is deliberately listed
+  // above the general one. Flagging that as a data problem would emit the same
+  // warnings forever and train everyone to ignore the channel, burying the real
+  // multi-matches. So: if every other matched keyword is contained within the
+  // winning one, the overlap is by construction, not a human error.
+  const winner = outcome.kind === 'queued' ? outcome.keyword : undefined;
+  const others = matched.filter((k) => k !== winner);
+  if (winner && others.every((k) => winner.includes(k))) return false;
+
   const destinations = new Set(
     matched
       .map((k) => QUEUE_KEYWORDS.find((q) => q.keyword === k)?.destination)

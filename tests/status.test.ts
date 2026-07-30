@@ -235,3 +235,25 @@ describe('office decisions, 2026-07-30', () => {
     });
   });
 });
+
+describe('multi-match reporting stays useful', () => {
+  // The overlapping insurance rules fire constantly by design. Reporting each
+  // one as a data problem would emit the same warnings on every cycle forever,
+  // and a channel that always cries wolf is one nobody reads — burying the real
+  // multi-matches it exists to surface.
+  it('stays quiet when the specific rule beat the general one by design', () => {
+    expect(isAmbiguous(classifyStatus('no insurance on file'))).toBe(false);
+    expect(isAmbiguous(classifyStatus('need insurance verification'))).toBe(false);
+    expect(isAmbiguous(classifyStatus('pt doesnt have insurance'))).toBe(false);
+  });
+
+  it('still flags genuinely conflicting keywords', () => {
+    // Two unrelated statuses in one cell is a human error worth looking at.
+    expect(isAmbiguous(classifyStatus('missing info and verify insurance'))).toBe(true);
+    expect(isAmbiguous(classifyStatus('dont accept but also missing info'))).toBe(true);
+  });
+
+  it('still flags a terminal keyword sitting next to a queued one', () => {
+    expect(isAmbiguous(classifyStatus('ohi but also missing info'))).toBe(true);
+  });
+});
