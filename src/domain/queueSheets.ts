@@ -113,6 +113,35 @@ export function parseQueueSheet(
   return { sheet, rows, groups, lastRow };
 }
 
+/**
+ * Matches a configured sheet name against the workbook's actual tab names,
+ * forgiving the differences a human would ignore: leading and trailing spaces,
+ * doubled internal spaces, and casing.
+ *
+ * The live workbook has a tab literally named `Not Accepted ` with a trailing
+ * space. An exact-match lookup silently reports it as "not present", and a queue
+ * with no sheet is a queue that never gets populated — a failure that looks like
+ * nothing happening at all.
+ */
+export function normalizeSheetName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+export function resolveSheetName(
+  wanted: string,
+  actualNames: readonly string[],
+): string | undefined {
+  const exact = actualNames.find((name) => name === wanted);
+  if (exact) return exact;
+
+  const target = normalizeSheetName(wanted);
+  const matches = actualNames.filter((name) => normalizeSheetName(name) === target);
+
+  // More than one tab differing only by whitespace or case is ambiguous, and
+  // picking one silently could populate a stale tab. Better to report nothing.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** Column letter on a queue sheet for a given queue column. */
 export function queueColumnLetter(
   column: QueueColumn,

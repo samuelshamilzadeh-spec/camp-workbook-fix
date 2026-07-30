@@ -9,7 +9,7 @@ import {
 } from '../src/domain/cells';
 import { assertNoFormulas, encodeSheet } from '../src/graph/workbook';
 import { isSyncId, newSyncId, normalizeSyncId } from '../src/domain/syncId';
-import { formatGroupHeader, parseGroupHeader } from '../src/domain/queueSheets';
+import { formatGroupHeader, parseGroupHeader, resolveSheetName } from '../src/domain/queueSheets';
 
 describe('column arithmetic', () => {
   it('round-trips single and multi-letter columns', () => {
@@ -133,5 +133,33 @@ describe('write safety', () => {
 describe('encodeSheet', () => {
   it('quotes the name and doubles inner apostrophes', () => {
     expect(encodeSheet("Bob's sheet")).toBe("('Bob''s%20sheet')");
+  });
+});
+
+describe('resolveSheetName', () => {
+  // The live workbook has a tab named `Not Accepted ` — trailing space. An
+  // exact match reports "not present", and a queue with no sheet silently never
+  // gets populated.
+  const actual = ['Not Accepted ', 'Missing Info (New)', 'Ineligible & Inactive', 'July 30, 2026'];
+
+  it('finds a tab whose name has a trailing space', () => {
+    expect(resolveSheetName('Not Accepted', actual)).toBe('Not Accepted ');
+  });
+
+  it('prefers an exact match when one exists', () => {
+    expect(resolveSheetName('Ineligible & Inactive', actual)).toBe('Ineligible & Inactive');
+  });
+
+  it('forgives casing and doubled internal spaces', () => {
+    expect(resolveSheetName('not  accepted', actual)).toBe('Not Accepted ');
+  });
+
+  it('returns undefined rather than guessing between two similar tabs', () => {
+    // Populating a stale tab is worse than populating none.
+    expect(resolveSheetName('Missing Info', ['Missing Info ', 'missing info'])).toBeUndefined();
+  });
+
+  it('returns undefined when nothing matches', () => {
+    expect(resolveSheetName('Verify Insurance', actual)).toBeUndefined();
   });
 });
