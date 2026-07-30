@@ -31,17 +31,44 @@ export interface RangeData {
  *     than left to reviewer discipline.
  *   - It never logs a range payload.
  */
+export interface WorkbookLocation {
+  /**
+   * The drive holding the workbook. Preferred, because `/drives/{id}/items/{id}`
+   * addresses a file wherever it lives — a site's default library, a second
+   * library on the same site, a Teams channel, or someone's OneDrive.
+   */
+  driveId?: string;
+  /**
+   * Fallback for when only the site is known. This resolves to the site's
+   * DEFAULT document library, so it silently misses a workbook stored in any
+   * other library on that site. Use `npm run resolve` to get a driveId instead.
+   */
+  siteId?: string;
+  itemId: string;
+}
+
 export class Workbook {
   private sessionId: string | undefined;
 
   constructor(
     private readonly graph: GraphClient,
-    private readonly siteId: string,
-    private readonly itemId: string,
-  ) {}
+    private readonly location: WorkbookLocation,
+  ) {
+    if (!location.driveId && !location.siteId) {
+      throw new Error(
+        'Workbook needs either GRAPH_DRIVE_ID (preferred) or GRAPH_SITE_ID. ' +
+          'Run `npm run resolve -- "<workbook URL>"` to get both.',
+      );
+    }
+    if (!location.itemId) {
+      throw new Error('Workbook needs GRAPH_ITEM_ID. Run `npm run resolve -- "<workbook URL>"`.');
+    }
+  }
 
   private get itemPath(): string {
-    return `/sites/${this.siteId}/drive/items/${this.itemId}`;
+    return this.location.driveId
+      ? `/drives/${this.location.driveId}/items/${this.location.itemId}`
+      : `/sites/${this.location.siteId}/drive/items/${this.location.itemId}`;
   }
 
   private get workbookPath(): string {

@@ -96,10 +96,21 @@ Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local)
 npm ci
 cp .env.example .env                                  # for the scripts
 cp local.settings.json.example local.settings.json    # for `func start`
-# fill in tenant/client/secret and the site + item ids in both
 npm test
+
+# Open the workbook in a browser, copy the address bar URL, then:
+npm run resolve -- "https://premierassist.sharepoint.com/sites/.../Workbook.xlsx"
+# prints GRAPH_DRIVE_ID / GRAPH_ITEM_ID to paste into .env, alongside the
+# tenant, client id and secret
+
 npm run inspect
 ```
+
+`resolve` exists because the file's location is not obvious from a site name.
+`GRAPH_DRIVE_ID` addresses the workbook wherever it actually lives — a site's
+default document library, a second library on the same site, a Teams channel, or
+someone's OneDrive. `GRAPH_SITE_ID` alone only reaches the site's *default*
+library, which fails silently if the workbook is anywhere else.
 
 Neither `.env` nor `local.settings.json` is committed — both hold a client
 secret. `.gitignore` also blocks `*.xlsx` and `*.csv`, so a workbook copy cannot

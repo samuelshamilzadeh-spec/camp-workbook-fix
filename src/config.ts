@@ -191,7 +191,10 @@ export interface RuntimeConfig {
   clientSecret: string | undefined;
   useManagedIdentity: boolean;
   managedIdentityClientId: string | undefined;
-  siteId: string;
+  /** Preferred: addresses the file wherever it lives. */
+  driveId: string | undefined;
+  /** Fallback; resolves to the site's default document library only. */
+  siteId: string | undefined;
   itemId: string;
   phase: Phase;
   dryRun: boolean;
@@ -249,7 +252,8 @@ export function loadConfig(): RuntimeConfig {
     clientSecret: env('AZURE_CLIENT_SECRET'),
     useManagedIdentity,
     managedIdentityClientId: env('AZURE_MANAGED_IDENTITY_CLIENT_ID'),
-    siteId: requireEnv('GRAPH_SITE_ID'),
+    driveId: env('GRAPH_DRIVE_ID'),
+    siteId: env('GRAPH_SITE_ID'),
     itemId: requireEnv('GRAPH_ITEM_ID'),
     phase: phaseRaw as Phase,
     // Dry run defaults to ON. Turning writes on has to be a deliberate act.

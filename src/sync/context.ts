@@ -28,7 +28,11 @@ export function createSyncContext(sink: LogSink, overrides: Partial<RuntimeConfi
   return {
     config,
     log,
-    workbook: new Workbook(graph, config.siteId, config.itemId),
+    workbook: new Workbook(graph, {
+      driveId: config.driveId,
+      siteId: config.siteId,
+      itemId: config.itemId,
+    }),
     state: createStateStore(config),
   };
 }
