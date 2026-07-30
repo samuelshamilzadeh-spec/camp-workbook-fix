@@ -47,8 +47,19 @@ export interface WorkbookLocation {
   itemId: string;
 }
 
+/**
+ * Graph signals an expired or unknown session through the error code rather
+ * than a distinct status. A session is cheap to recreate, so anything
+ * session-shaped is treated as recoverable.
+ */
+function isSessionError(error: unknown): boolean {
+  const code = (error as { graphCode?: string })?.graphCode;
+  return typeof code === 'string' && /session/i.test(code);
+}
+
 export class Workbook {
   private sessionId: string | undefined;
+  private sessionPersists: boolean | undefined;
 
   constructor(
     private readonly graph: GraphClient,
@@ -99,23 +110,73 @@ export class Workbook {
   }
 
   /**
-   * A persisted session batches our writes against one workbook instance and
-   * keeps Graph from re-loading the file on every call. Non-persisted sessions
-   * discard changes, so read-only phases use one too — it is faster and cannot
-   * modify anything.
+   * Opens a workbook session, reusing the existing one when it already matches.
+   *
+   * This is THE performance lever for this workbook, not a nicety. Measured
+   * against the live file, 3.5 MB:
+   *
+   *   without a session   single cell 8300ms, whole sheet 6613ms
+   *   within a session    single cell  195ms, whole sheet  195ms
+   *
+   * A single cell costing the same as a whole sheet gives it away: the cost is
+   * the Excel service opening the workbook, once per request, not the data. A
+   * full 46-sheet scan is 66s session-less and 9.3s in a session — of which
+   * ~9s is the first call paying the open, and every later call is ~200ms.
+   *
+   * So the session must OUTLIVE the cycle. Creating and closing one per cycle
+   * pays that cold open every five seconds forever, which is what the first
+   * implementation did. It is held on the Workbook instance, which lives for
+   * the worker process, and Graph keeps a session warm for several minutes of
+   * inactivity — far longer than the gap between cycles.
+   *
+   * A persisted session is required for writes; reads use a non-persisted one,
+   * which is faster and structurally incapable of modifying the file.
    */
-  async createSession(persistChanges: boolean): Promise<void> {
+  async ensureSession(persistChanges: boolean): Promise<void> {
+    if (this.sessionId && this.sessionPersists === persistChanges) return;
+    if (this.sessionId) await this.closeSession();
+
     const session = await this.graph.request<{ id: string }>(
       `${this.workbookPath}/createSession`,
       { method: 'POST', body: { persistChanges } },
     );
     this.sessionId = session.id;
+    this.sessionPersists = persistChanges;
+  }
+
+  /** Back-compat alias. Prefer ensureSession, which reuses. */
+  async createSession(persistChanges: boolean): Promise<void> {
+    await this.ensureSession(persistChanges);
+  }
+
+  /**
+   * Runs a request, and if the session turned out to be expired, opens a fresh
+   * one and tries once more. `run` reads `sessionHeaders` on each call, so the
+   * retry picks up the new id.
+   */
+  private async withSession<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (!this.sessionId || !isSessionError(error)) throw error;
+      const persists = this.sessionPersists ?? false;
+      this.sessionId = undefined;
+      this.sessionPersists = undefined;
+      await this.ensureSession(persists);
+      return run();
+    }
+  }
+
+  /** True when a session is currently open, for logging a cold start. */
+  get hasSession(): boolean {
+    return this.sessionId !== undefined;
   }
 
   async closeSession(): Promise<void> {
     if (!this.sessionId) return;
     const id = this.sessionId;
     this.sessionId = undefined;
+    this.sessionPersists = undefined;
     try {
       await this.graph.request(`${this.workbookPath}/closeSession`, {
         method: 'POST',
@@ -128,9 +189,11 @@ export class Workbook {
   }
 
   async listWorksheets(): Promise<WorksheetInfo[]> {
-    const result = await this.graph.request<{ value: WorksheetInfo[] }>(
-      `${this.workbookPath}/worksheets?$select=id,name,position,visibility`,
-      { headers: this.sessionHeaders },
+    const result = await this.withSession(() =>
+      this.graph.request<{ value: WorksheetInfo[] }>(
+        `${this.workbookPath}/worksheets?$select=id,name,position,visibility`,
+        { headers: this.sessionHeaders },
+      ),
     );
     return result.value;
   }
@@ -140,16 +203,20 @@ export class Workbook {
    * so this is preferred over targeted per-row reads everywhere.
    */
   async getUsedRange(sheetName: string): Promise<RangeData> {
-    return this.graph.request<RangeData>(
-      `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/usedRange(valuesOnly=true)?$select=address,rowCount,columnCount,values`,
-      { headers: this.sessionHeaders },
+    return this.withSession(() =>
+      this.graph.request<RangeData>(
+        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/usedRange(valuesOnly=true)?$select=address,rowCount,columnCount,values`,
+        { headers: this.sessionHeaders },
+      ),
     );
   }
 
   async getRange(sheetName: string, address: string): Promise<RangeData> {
-    return this.graph.request<RangeData>(
-      `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')?$select=address,rowCount,columnCount,values`,
-      { headers: this.sessionHeaders },
+    return this.withSession(() =>
+      this.graph.request<RangeData>(
+        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')?$select=address,rowCount,columnCount,values`,
+        { headers: this.sessionHeaders },
+      ),
     );
   }
 
@@ -160,9 +227,11 @@ export class Workbook {
    */
   async writeRange(sheetName: string, address: string, values: unknown[][]): Promise<void> {
     assertNoFormulas(values, sheetName, address);
-    await this.graph.request(
-      `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')`,
-      { method: 'PATCH', body: { values }, headers: this.sessionHeaders },
+    await this.withSession(() =>
+      this.graph.request(
+        `${this.workbookPath}/worksheets/${encodeSheet(sheetName)}/range(address='${encodeURIComponent(address)}')`,
+        { method: 'PATCH', body: { values }, headers: this.sessionHeaders },
+      ),
     );
   }
 

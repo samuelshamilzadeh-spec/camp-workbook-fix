@@ -77,7 +77,11 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   const willWrite = shouldApply(config);
   if (willWrite) assertLayoutVerified(config);
 
-  await workbook.createSession(willWrite);
+  // Reused across cycles, never closed here. The cold open costs ~9s against
+  // this workbook; every later read in the same session is ~200ms.
+  const coldStart = !workbook.hasSession;
+  await workbook.ensureSession(willWrite);
+  if (coldStart) log.info('session.opened', { wouldWrite: willWrite });
 
   try {
     const worksheets = await workbook.listWorksheets();
@@ -193,9 +197,9 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   } catch (error) {
     log.error('cycle.failed', describeError(error));
     throw error;
-  } finally {
-    await workbook.closeSession();
   }
+  // Deliberately no closeSession here: see Workbook.ensureSession. Graph
+  // expires an idle session on its own, and the next cycle reopens one.
 }
 
 /** Writes happen only above phase 1 and only when dry run is off. */
