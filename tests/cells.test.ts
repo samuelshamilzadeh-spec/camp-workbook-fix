@@ -9,7 +9,14 @@ import {
 } from '../src/domain/cells';
 import { assertNoFormulas, encodeSheet, worksheetPath } from '../src/graph/workbook';
 import { isSyncId, newSyncId, normalizeSyncId } from '../src/domain/syncId';
-import { formatGroupHeader, parseGroupHeader, resolveSheetName } from '../src/domain/queueSheets';
+import {
+  formatGrandTotal,
+  formatGroupHeader,
+  isGrandTotalRow,
+  parseGrandTotal,
+  parseGroupHeader,
+  resolveSheetName,
+} from '../src/domain/queueSheets';
 
 describe('column arithmetic', () => {
   it('round-trips single and multi-letter columns', () => {
@@ -197,5 +204,24 @@ describe('resolveSheetName', () => {
 
   it('returns undefined when nothing matches', () => {
     expect(resolveSheetName('Verify Insurance', actual)).toBeUndefined();
+  });
+});
+
+describe('grand total row', () => {
+  it('round-trips', () => {
+    expect(parseGrandTotal(formatGrandTotal(374))).toBe(374);
+    expect(formatGrandTotal(1)).toBe('TOTAL - 1 patient');
+  });
+
+  it('is not mistaken for a camp called TOTAL', () => {
+    // Otherwise a rebuild nests a camp group inside the total row and the
+    // counts drift apart on every pass.
+    expect(parseGroupHeader('TOTAL - 374 patients')).toBeUndefined();
+    expect(isGrandTotalRow('TOTAL - 374 patients')).toBe(true);
+    expect(isGrandTotalRow('Achim - 12 patients')).toBe(false);
+  });
+
+  it('still parses ordinary camp headers', () => {
+    expect(parseGroupHeader('Achim - 12 patients')).toEqual({ camp: 'Achim', count: 12 });
   });
 });

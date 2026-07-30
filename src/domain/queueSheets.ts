@@ -39,12 +39,44 @@ export interface ParsedQueueSheet {
 /** `Camp Ramah - 12 patients` */
 const HEADER_PATTERN = /^\s*(.+?)\s*-\s*(\d+)\s+patients?\s*$/i;
 
+/** `TOTAL - 374 patients`, written once at the foot of each queue sheet. */
+const TOTAL_LABEL = 'TOTAL';
+const TOTAL_PATTERN = /^\s*TOTAL\s*-\s*(\d+)\s+patients?\s*$/i;
+
+/**
+ * The camp divider row: one cell, camp name and a count.
+ *
+ * The count is a snapshot taken when the row was written, not a live figure —
+ * it says what the queue held at that moment. Keeping it in a single cell (as
+ * opposed to a formula, or a second column) is deliberate: this workbook is
+ * being rescued from a formula load, and a static string costs nothing to
+ * recalculate.
+ */
 export function formatGroupHeader(camp: string, count: number): string {
   return `${camp} - ${count} patient${count === 1 ? '' : 's'}`;
 }
 
+export function formatGrandTotal(count: number): string {
+  return `${TOTAL_LABEL} - ${count} patient${count === 1 ? '' : 's'}`;
+}
+
+export function parseGrandTotal(value: unknown): number | undefined {
+  if (isBlank(value)) return undefined;
+  const match = TOTAL_PATTERN.exec(String(value));
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * True for the grand total row, which must never be mistaken for a camp called
+ * "TOTAL" — otherwise every rebuild would nest a group inside the total.
+ */
+export function isGrandTotalRow(value: unknown): boolean {
+  return parseGrandTotal(value) !== undefined;
+}
+
 export function parseGroupHeader(value: unknown): { camp: string; count: number } | undefined {
   if (isBlank(value)) return undefined;
+  if (isGrandTotalRow(value)) return undefined;
   const match = HEADER_PATTERN.exec(String(value));
   if (!match) return undefined;
   return { camp: match[1]!.trim(), count: Number(match[2]) };
