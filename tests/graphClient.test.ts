@@ -59,6 +59,22 @@ describe('GraphClient retries', () => {
     expect(delays).toEqual([3000]);
   });
 
+  it('retries a 501 OpenWorkbookBlockedWorkbook', async () => {
+    // The Excel API returns this when a desktop client is holding the file.
+    // Observed on 18 of 46 sheets in one scan of the live workbook.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(response(501, { error: { code: 'OpenWorkbookBlockedWorkbook' } }))
+      .mockResolvedValueOnce(response(200, { ok: true }));
+
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+    });
+
+    await expect(client.request('/x')).resolves.toEqual({ ok: true });
+  });
+
   it('does not retry a 403, which means admin consent has not been granted', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(403, { error: { code: 'accessDenied' } }));
     const client = new GraphClient(tokens, log, {

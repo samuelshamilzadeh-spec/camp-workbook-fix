@@ -45,7 +45,16 @@ export interface GraphClientOptions {
  * 429 and 503 carry Retry-After and must be honoured — Graph throttling on the
  * workbook endpoints is per-file and easy to hit at a 5-second cadence.
  */
-const RETRYABLE_STATUS = new Set([409, 423, 429, 500, 502, 503, 504]);
+const RETRYABLE_STATUS = new Set([409, 423, 429, 500, 501, 502, 503, 504]);
+
+/**
+ * 501 is normally "not implemented" and would never be retried. The Excel
+ * workbook API overloads it for `OpenWorkbookBlockedWorkbook`, which means the
+ * service could not open the file right now — in practice, a desktop client is
+ * holding it. Observed on 18 of 46 sheets in a single scan of the live workbook
+ * while staff were editing, so it is a normal operating condition here, not a
+ * defect.
+ */
 
 export class GraphClient {
   private readonly maxAttempts: number;
