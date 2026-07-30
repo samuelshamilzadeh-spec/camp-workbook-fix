@@ -221,8 +221,12 @@ describe('reconcile', () => {
       sourceSheet: '2026-07-30',
       sourceRow: 2,
     });
-    // Notes stay on the queue sheet and are never written back.
-    expect(plan.intents.some((i) => i.kind === 'write-back' && i.field === 'Notes')).toBe(false);
+    // Date of Visit and Source Row are queue-only and never written back.
+    expect(
+      plan.intents.some(
+        (i) => i.kind === 'write-back' && (i.field === 'Date of Visit' || i.field === 'Source Row'),
+      ),
+    ).toBe(false);
   });
 
   it('removes a queue row once the source reaches a terminal status', () => {

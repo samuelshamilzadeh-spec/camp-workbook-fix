@@ -83,6 +83,61 @@ function toUtcDay(date: Date): number {
 }
 
 /**
+ * Canonical `YYYY-MM-DD` for a value that might be a date, or undefined if it
+ * is not one.
+ *
+ * The same birthday is stored two different ways in this workbook: the queue
+ * tabs hold an Excel serial (`40147`) and the daily sheets hold text
+ * (`11/30/2009`). Both mean 30 November 2009. Comparing their string forms
+ * makes every one of them look like a different patient — which is exactly
+ * what it did, producing 13 false "identity mismatch" rejections whose only
+ * disagreement was the date of birth.
+ */
+export function toDateKey(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+
+  if (typeof value === 'number' || /^\d+(\.\d+)?$/.test(String(value).trim())) {
+    const date = excelSerialToDate(Number(value));
+    return date ? date.toISOString().slice(0, 10) : undefined;
+  }
+
+  const text = String(value).trim();
+  if (!text) return undefined;
+
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+  if (iso) return `${iso[1]}-${pad(iso[2]!)}-${pad(iso[3]!)}`;
+
+  // US order, which is what the daily sheets use.
+  const us = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(text);
+  if (us) {
+    const year = Number(us[3]);
+    const full = year < 100 ? (year > 30 ? 1900 + year : 2000 + year) : year;
+    return `${full}-${pad(us[1]!)}-${pad(us[2]!)}`;
+  }
+
+  return undefined;
+}
+
+function pad(part: string): string {
+  return part.padStart(2, '0');
+}
+
+/**
+ * Compares two values that may both be dates in different representations,
+ * falling back to the ordinary comparison when neither is.
+ */
+export function sameDateOrValue(
+  a: unknown,
+  b: unknown,
+  fallback: (x: unknown, y: unknown) => boolean,
+): boolean {
+  const left = toDateKey(a);
+  const right = toDateKey(b);
+  if (left !== undefined && right !== undefined) return left === right;
+  return fallback(a, b);
+}
+
+/**
  * Resolves a queue row's `Date of Visit` to a daily sheet name. Accepts either
  * the serial the live tabs use or a plain sheet name, since rows this code
  * writes carry the name.
@@ -165,7 +220,9 @@ export function planAdoption(input: AdoptionInput): AdoptionResult {
       const queueValue = queueRow.values[field];
       const dailyValue = candidate.fields[field];
       if (isBlank(queueValue) && isBlank(dailyValue)) continue;
-      if (sameValue(queueValue, dailyValue)) confirmedBy.push(field);
+      // Date-aware: the same birthday is an Excel serial on the queue tabs and
+      // text on the daily sheets.
+      if (sameDateOrValue(queueValue, dailyValue, sameValue)) confirmedBy.push(field);
       else mismatchedFields.push(field);
     }
 

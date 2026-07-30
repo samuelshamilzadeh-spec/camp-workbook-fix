@@ -108,7 +108,22 @@ export function parseQueueSheet(
     const cell = (column: string): unknown =>
       cellFromGrid(used.values, startRow, startColumn, row, column);
 
-    const header = parseGroupHeader(cell(first));
+    // A camp divider is a row with something in the first column and nothing
+    // anywhere else. The live tabs write a bare name (`Achim`); this code
+    // writes a name plus a count (`Achim - 12 patients`). Both are dividers,
+    // and treating a bare one as a patient row is what made 74 of them fail to
+    // link to a source row that was never going to exist.
+    const firstCell = cell(first);
+    const restBlank =
+      !isBlank(firstCell) &&
+      QUEUE_COLUMNS.slice(1).every((_, index) => isBlank(cell(offsetColumn(first, index + 1))));
+
+    const header = parseGroupHeader(firstCell) ?? (restBlank && !isGrandTotalRow(firstCell)
+      ? { camp: String(firstCell).trim(), count: 0 }
+      : undefined);
+
+    if (restBlank && isGrandTotalRow(firstCell)) continue;
+
     if (header) {
       currentGroup = {
         camp: header.camp,

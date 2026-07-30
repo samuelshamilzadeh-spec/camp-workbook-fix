@@ -22,6 +22,7 @@
     "create-sheet": "tsx scripts/create-queue-sheet.ts",
     "backfill": "tsx scripts/phase0-backfill.ts",
     "reconcile": "tsx scripts/run-reconcile.ts",
+    "adopt": "tsx scripts/adopt-dry-run.ts",
     "concurrency-test": "tsx scripts/concurrency-test.ts"
   },
   "dependencies": {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { excelSerialToDate, planAdoption, resolveSourceSheet } from '../src/domain/adopt';
+import {
+  excelSerialToDate,
+  planAdoption,
+  resolveSourceSheet,
+  sameDateOrValue,
+  toDateKey,
+} from '../src/domain/adopt';
+import { sameValue } from '../src/domain/reconcile';
 import type { DailyRow } from '../src/domain/dailySheets';
 import type { QueueRow } from '../src/domain/queueSheets';
 import type { QueueSheetName } from '../src/config';
@@ -227,5 +234,47 @@ describe('planAdoption', () => {
       newSyncId: () => 'S000000000001',
     };
     expect(JSON.stringify(planAdoption(input))).toBe(JSON.stringify(planAdoption(input)));
+  });
+});
+
+describe('date-aware identity comparison', () => {
+  it('treats an Excel serial and a text date as the same birthday', () => {
+    // The live workbook stores the same birthday two ways: 40147 on the queue
+    // tabs, "11/30/2009" on the daily sheets. Comparing string forms made 13
+    // real patients look like 13 different people.
+    expect(toDateKey(40147)).toBe('2009-11-30');
+    expect(toDateKey('11/30/2009')).toBe('2009-11-30');
+    expect(toDateKey('2009-11-30')).toBe('2009-11-30');
+  });
+
+  it('matches across the two representations', () => {
+    const never = () => false;
+    expect(sameDateOrValue(40147, '11/30/2009', never)).toBe(true);
+    expect(sameDateOrValue('11/30/2009', 40147, never)).toBe(true);
+  });
+
+  it('still separates genuinely different birthdays', () => {
+    const never = () => false;
+    expect(sameDateOrValue(40147, '11/30/2010', never)).toBe(false);
+    expect(sameDateOrValue(40147, 40148, never)).toBe(false);
+  });
+
+  it('falls back to the ordinary comparison for things that are not dates', () => {
+    expect(sameDateOrValue('Cohen', 'Cohen', sameValue)).toBe(true);
+    expect(sameDateOrValue('Cohen', 'Cohn', sameValue)).toBe(false);
+  });
+
+  it('adopts a row whose only disagreement was the date format', () => {
+    const daily = new Map([
+      [SHEET, new Map([[12, dailyRow(SHEET, 12, 'Levin', 'Chanie', '11/30/2009')]])],
+    ]);
+    const result = planAdoption({
+      queueRows: [queueRow(3, 46225, 12, 'Levin', 'Chanie', 40147 as unknown as string)],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.problems).toHaveLength(0);
+    expect(result.matches).toHaveLength(1);
   });
 });
