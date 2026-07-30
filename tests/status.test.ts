@@ -175,13 +175,40 @@ describe('office decisions, 2026-07-30', () => {
     expect(classifyStatus('skip').kind).toBe('ignored');
   });
 
-  it('routes no-insurance wording to Not Accepted', () => {
-    for (const value of ['no insurance on file', 'no insurance', 'need insurance',
-                         'need ins', 'doesnt have insurance', 'doesnt have ins',
-                         'pt doesnt have insurance', 'wrote paper has no ins',
-                         'incorrect insurance', 'invalid ins']) {
-      expect(classifyStatus(value)).toMatchObject({ destination: 'Not Accepted' });
-    }
+  // The eleven insurance phrasings, assigned individually by the office. They
+  // are NOT one group — they split four ways, and several contain one another,
+  // so the table order in QUEUE_KEYWORDS is what keeps them apart. These cases
+  // exist to fail loudly if that order is ever disturbed.
+  it.each([
+    // "we need the information"
+    ['no insurance on file', 'Missing Info'],
+    ['need insurance', 'Missing Info'],
+    ['need ins', 'Missing Info'],
+    // genuinely uninsured, cannot bill
+    ['no insurance', 'Not Accepted'],
+    ['wrote paper has no ins', 'Not Accepted'],
+    ['doesnt have ins', 'Not Accepted'],
+    ['doesnt have insurance', 'Not Accepted'],
+    ['pt doesnt have insurance', 'Not Accepted'],
+    // insured, but the details need checking or fixing
+    ['need insurance verification', 'Verify Insurance'],
+    ['invalid ins', 'Ineligible & Inactive'],
+    ['incorrect insurance', 'Ineligible & Inactive'],
+  ])('routes %s to %s', (value, destination) => {
+    expect(classifyStatus(value)).toMatchObject({ destination });
+  });
+
+  it('keeps the overlapping insurance phrases apart', () => {
+    // Each pair differs only by a substring. If the general rule were listed
+    // first it would swallow the specific one, and the office's distinction
+    // would vanish without any error.
+    expect(classifyStatus('no insurance on file')).toMatchObject({ destination: 'Missing Info' });
+    expect(classifyStatus('no insurance')).toMatchObject({ destination: 'Not Accepted' });
+
+    expect(classifyStatus('need insurance verification')).toMatchObject({
+      destination: 'Verify Insurance',
+    });
+    expect(classifyStatus('need insurance')).toMatchObject({ destination: 'Missing Info' });
   });
 
   it('routes campium/campflow wording to Missing Info', () => {

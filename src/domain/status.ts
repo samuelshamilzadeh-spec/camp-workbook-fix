@@ -105,18 +105,42 @@ export const QUEUE_KEYWORDS: readonly QueueKeyword[] = [
   { keyword: 'inegilible', destination: 'Ineligible & Inactive' },
   { keyword: 'inactive', destination: 'Ineligible & Inactive' }, // 16
 
+  // --- Insurance wording, assigned by the office 2026-07-30 ----------------
+  //
+  // ORDER IS LOAD-BEARING HERE. These phrases contain one another, and the
+  // first match in table order wins, so every rule must sit above the more
+  // general rule it would otherwise be swallowed by:
+  //
+  //   `no insurance on file`        contains `no insurance`
+  //   `need insurance verification` contains `need insurance`
+  //   `need insurance`              contains `need ins`
+  //   `pt doesnt have insurance`    contains `doesnt have ins`
+  //
+  // Get the order wrong and the distinctions the office just drew collapse
+  // into whichever rule happens to be listed first — silently, since every
+  // one of them is a valid destination.
+
+  // Verification wanted -> Verify Insurance. Above `need insurance`.
+  { keyword: 'need insurance verification', destination: 'Verify Insurance' },
   { keyword: 'verify insurance', destination: 'Verify Insurance' }, // 269
 
-  // Confirmed by the office 2026-07-30: no-insurance wording is Not Accepted.
-  { keyword: 'no insurance', destination: 'Not Accepted' },
-  { keyword: 'need insurance', destination: 'Not Accepted' },
-  { keyword: 'need ins', destination: 'Not Accepted' },
-  { keyword: 'doesnt have insurance', destination: 'Not Accepted' },
-  { keyword: "doesn't have insurance", destination: 'Not Accepted' },
-  { keyword: 'doesnt have ins', destination: 'Not Accepted' },
-  { keyword: 'has no ins', destination: 'Not Accepted' },
-  { keyword: 'incorrect insurance', destination: 'Not Accepted' },
-  { keyword: 'invalid ins', destination: 'Not Accepted' },
+  // "we need the information" -> Missing Info. `no insurance on file` sits
+  // above the bare `no insurance` below, which goes somewhere else entirely.
+  { keyword: 'no insurance on file', destination: 'Missing Info' }, // 5
+  { keyword: 'need insurance', destination: 'Missing Info' }, // 4
+  { keyword: 'need ins', destination: 'Missing Info' }, // 1
+
+  // Insurance exists but is wrong, so somebody must call and fix it.
+  { keyword: 'incorrect insurance', destination: 'Ineligible & Inactive' }, // 1
+  { keyword: 'invalid ins', destination: 'Ineligible & Inactive' }, // 1
+
+  // Genuinely no insurance -> cannot bill -> Not Accepted.
+  { keyword: 'no insurance', destination: 'Not Accepted' }, // 3
+  { keyword: 'has no ins', destination: 'Not Accepted' }, // 1, `wrote paper has no ins`
+  // Catches `doesnt have ins`, `doesnt have insurance` and
+  // `pt doesnt have insurance` in one rule.
+  { keyword: 'doesnt have ins', destination: 'Not Accepted' }, // 4
+  { keyword: "doesn't have ins", destination: 'Not Accepted' },
 
   // Confirmed by the office: the campium/campflow wording is Missing Info.
   { keyword: 'not on campium', destination: 'Missing Info' },

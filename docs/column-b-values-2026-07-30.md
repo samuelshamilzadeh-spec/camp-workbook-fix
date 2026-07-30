@@ -69,13 +69,49 @@ no error and no failure — just 1,268 patients quietly never queued.
 | `needs ohi` / `needs lasante` | 1268 | **Leave alone.** No queue row. Classified `pending`, never `terminal`. |
 | `skip` | 11 | **Nothing at all.** No queue row, nothing moved. Classified `ignored`. |
 | `not on campium` / `not on campflow` | 4 | **Missing Info** |
-| no-insurance wording | 21 | **Not Accepted** |
+| insurance wording | 21 | **Splits four ways — see below** |
 | `-pa` suffix (~120) | — | No effect on routing; the base keyword decides. |
 
 `pending` and `ignored` both produce no queue row, so they behave like
 `terminal` for queue purposes. They are separate outcome kinds anyway, because
 collapsing them is what hid the 1,268-row bug, and because a count of
 outstanding work is worth having.
+
+### The eleven insurance phrasings
+
+Not one group. The office assigned each individually on a second pass, and they
+split four ways:
+
+| Value | Rows | Destination |
+|---|---|---|
+| `no insurance on file` | 5 | Missing Info |
+| `need insurance` | 4 | Missing Info |
+| `need ins` | 1 | Missing Info |
+| `no insurance` | 3 | Not Accepted |
+| `doesnt have insurance` | 2 | Not Accepted |
+| `doesnt have ins` | 1 | Not Accepted |
+| `pt doesnt have insurance` | 1 | Not Accepted |
+| `wrote paper has no ins` | 1 | Not Accepted |
+| `need insurance verification` | 1 | Verify Insurance |
+| `incorrect insurance` | 1 | Ineligible & Inactive |
+| `invalid ins` | 1 | Ineligible & Inactive |
+
+The logic: *we need the information* is Missing Info; *there is no insurance*
+cannot be billed, so Not Accepted; *the insurance is wrong and someone must call
+and fix it* is Ineligible & Inactive.
+
+**These phrases contain one another**, and QUEUE_KEYWORDS is first-match-wins in
+table order, so every specific rule sits above the general one that would
+otherwise swallow it:
+
+    no insurance on file          contains  no insurance
+    need insurance verification   contains  need insurance
+    need insurance               contains  need ins
+    pt doesnt have insurance     contains  doesnt have ins
+
+Reorder those and the distinctions collapse into whichever rule is listed first
+— with no error, since every destination involved is legitimate. Tests pin each
+of the eleven individually.
 
 ## Rows flagged for manual review
 
