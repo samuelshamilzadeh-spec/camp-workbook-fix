@@ -130,7 +130,8 @@ async function main(): Promise<void> {
     );
   }
 
-  const config = loadConfig();
+  // Not requireWorkbook: finding those ids is this script's entire job.
+  const config = loadConfig({ requireWorkbook: false });
   const log = createLogger(consoleSink, { phase: 1, dryRun: true });
   const graph = new GraphClient(createTokenProvider(createCredential(config)), log);
 

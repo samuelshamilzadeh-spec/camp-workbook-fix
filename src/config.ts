@@ -280,10 +280,27 @@ function boolEnv(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
-export function loadConfig(): RuntimeConfig {
+export interface LoadConfigOptions {
+  /**
+   * `scripts/resolve-workbook.ts` exists precisely to discover GRAPH_DRIVE_ID
+   * and GRAPH_ITEM_ID, so it cannot require them to already be set.
+   */
+  requireWorkbook?: boolean;
+}
+
+export function loadConfig(options: LoadConfigOptions = {}): RuntimeConfig {
   loadEnvFileOnce();
 
+  const requireWorkbook = options.requireWorkbook ?? true;
+
   const useManagedIdentity = boolEnv('AZURE_USE_MANAGED_IDENTITY', false);
+  if (requireWorkbook && !env('GRAPH_DRIVE_ID') && !env('GRAPH_SITE_ID')) {
+    throw new Error(
+      'Set GRAPH_DRIVE_ID (preferred) or GRAPH_SITE_ID. Get it by running:\n' +
+        '  npm run resolve -- "<the workbook URL from your browser>"',
+    );
+  }
+
   const phaseRaw = Number(env('SYNC_PHASE') ?? '1');
   if (!Number.isInteger(phaseRaw) || phaseRaw < 0 || phaseRaw > 5) {
     throw new Error(`SYNC_PHASE must be an integer 0-5, got "${env('SYNC_PHASE')}"`);
@@ -297,7 +314,7 @@ export function loadConfig(): RuntimeConfig {
     managedIdentityClientId: env('AZURE_MANAGED_IDENTITY_CLIENT_ID'),
     driveId: env('GRAPH_DRIVE_ID'),
     siteId: env('GRAPH_SITE_ID'),
-    itemId: requireEnv('GRAPH_ITEM_ID'),
+    itemId: requireWorkbook ? requireEnv('GRAPH_ITEM_ID') : (env('GRAPH_ITEM_ID') ?? ''),
     phase: phaseRaw as Phase,
     // Dry run defaults to ON. Turning writes on has to be a deliberate act.
     dryRun: boolEnv('SYNC_DRY_RUN', true),
