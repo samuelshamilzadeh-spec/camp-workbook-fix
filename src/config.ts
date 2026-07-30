@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 /**
  * Every assumption about the workbook's shape lives here, in one place, so that
  * checking the build brief against the real file is a matter of editing this
@@ -220,6 +223,44 @@ export interface RuntimeConfig {
   stateContainer: string;
 }
 
+/**
+ * Loads `.env` from the working directory when present, so the CLI scripts pick
+ * up local settings without every invocation needing `node --env-file=`.
+ *
+ * Never throws and never overwrites a variable that is already set: in Azure the
+ * app settings are the real configuration and there is no .env file at all.
+ */
+let envFileLoaded = false;
+function loadEnvFileOnce(): void {
+  if (envFileLoaded) return;
+  envFileLoaded = true;
+
+  const path = join(process.cwd(), '.env');
+  if (!existsSync(path)) return;
+
+  try {
+    for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq === -1) continue;
+
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (key && process.env[key] === undefined) process.env[key] = value;
+    }
+  } catch {
+    // A malformed .env is a local-development problem, not a reason to refuse
+    // to start. requireEnv reports whatever is actually missing.
+  }
+}
+
 function env(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value.trim() === '' ? undefined : value.trim();
@@ -240,6 +281,8 @@ function boolEnv(name: string, fallback: boolean): boolean {
 }
 
 export function loadConfig(): RuntimeConfig {
+  loadEnvFileOnce();
+
   const useManagedIdentity = boolEnv('AZURE_USE_MANAGED_IDENTITY', false);
   const phaseRaw = Number(env('SYNC_PHASE') ?? '1');
   if (!Number.isInteger(phaseRaw) || phaseRaw < 0 || phaseRaw > 5) {
