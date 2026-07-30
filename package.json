@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "inspect": "tsx scripts/inspect-workbook.ts",
     "resolve": "tsx scripts/resolve-workbook.ts",
+    "create-sheet": "tsx scripts/create-queue-sheet.ts",
     "backfill": "tsx scripts/phase0-backfill.ts",
     "reconcile": "tsx scripts/run-reconcile.ts",
     "concurrency-test": "tsx scripts/concurrency-test.ts"

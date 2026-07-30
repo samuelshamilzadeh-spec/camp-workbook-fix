@@ -54,6 +54,9 @@ export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
   'Missing Info': 'Missing Info (New)',
   'Not Accepted': 'Not Accepted',
   'Ineligible & Inactive': 'Ineligible & Inactive',
+  // NOTE: the live `United Refuah` tab was renamed to `United Refuah (old)` and
+  // hidden, so this currently resolves to nothing and its 85 rows have no home.
+  // Kept pointing at the canonical name so creating that tab is all it takes.
   'United Refuah': 'United Refuah',
 };
 
@@ -62,9 +65,13 @@ export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
  * must never be read or written.
  */
 export const IGNORED_TABS: readonly string[] = [
-  'Missing Ins info',
-  'Missing info 25',
+  // Hidden by the office 2026-07-30 and explicitly out of scope: as far as this
+  // code is concerned these tabs do not exist. Never read, never written.
+  'United Refuah (old)',
   'Dont Take Ins (old)',
+  'Missing Ins info',
+  // Historical.
+  'Missing info 25',
   '2025 Archive',
   '2024 Archive',
 ] as const;
@@ -210,6 +217,8 @@ export const LAYOUT: WorkbookLayout = {
   // scan never mistakes one for a daily sheet.
   knownNonDailySheets: [
     'United Refuah',
+    'United Refuah (old)',
+    'Verify Insurance',
     'Claude Log',
     'Cheat Sheet',
     '_Feed',
