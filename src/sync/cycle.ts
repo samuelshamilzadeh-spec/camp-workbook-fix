@@ -5,6 +5,7 @@ import {
   type QueueSheetName,
   type RuntimeConfig,
 } from '../config';
+import { mapWithConcurrency } from '../domain/concurrency';
 import { parseDailySheet, planScan } from '../domain/dailySheets';
 import { parseQueueSheet, assertSyncIdColumnIsClear } from '../domain/queueSheets';
 import { reconcile, type ReconcilePlan } from '../domain/reconcile';
@@ -87,11 +88,9 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
 
     // Queue sheets first: they tell us which daily sheets a bounded scan must
     // include beyond the most recent N.
-    const queues = [];
-    for (const name of queueNames) {
-      const used = await workbook.getUsedRange(name);
-      queues.push(parseQueueSheet(name, used));
-    }
+    const queues = await mapWithConcurrency(queueNames, config.readConcurrency, async (name) =>
+      parseQueueSheet(name, await workbook.getUsedRange(name)),
+    );
 
     const referencedSheets = new Set<string>();
     for (const queue of queues) {
@@ -113,6 +112,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
       hotDaysBack: config.hotDaysBack,
       hotDaysForward: config.hotDaysForward,
       coldBatchSize: config.coldBatchSize,
+      maxSheetsPerCycle: config.maxSheetsPerCycle,
       cursor: previous.scanCursor ?? 0,
     });
 
@@ -128,7 +128,19 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         totalDaily: scan.totalDaily,
         sweepCycles: scan.sweepCycles,
       },
+      reason: scan.full ? 'full-scan' : 'tiered',
     });
+
+    if (!scan.full) {
+      // Crossing this line changes the freshness guarantee from "every sheet,
+      // every cycle" to "every sheet within sweepCycles", so it is worth saying
+      // out loud rather than discovering later.
+      log.warn('scan.tiering_engaged', {
+        count: scan.totalDaily,
+        counts: { maxSheetsPerCycle: config.maxSheetsPerCycle, sweepCycles: scan.sweepCycles },
+        reason: 'daily sheet count exceeds the full-scan threshold',
+      });
+    }
 
     if (scan.unparseable.length > 0) {
       // These still get scanned, on the tail of the rotation. But a daily sheet
@@ -141,11 +153,13 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
       });
     }
 
-    const daily = [];
-    for (const name of scannedSheets) {
-      const used = await workbook.getUsedRange(name);
-      daily.push(parseDailySheet(name, used));
-    }
+    // Concurrent, because ~60 sequential reads at a few hundred milliseconds
+    // each does not fit in a five-second cycle. See mapWithConcurrency.
+    const daily = await mapWithConcurrency(
+      scannedSheets,
+      config.readConcurrency,
+      async (name) => parseDailySheet(name, await workbook.getUsedRange(name)),
+    );
 
     const plan = reconcile({ daily, queues, newSyncId });
 

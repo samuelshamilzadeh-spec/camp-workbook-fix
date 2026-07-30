@@ -69,6 +69,7 @@ async function main(): Promise<void> {
       hotDaysBack: Number(process.env.SYNC_HOT_DAYS_BACK ?? '7'),
       hotDaysForward: Number(process.env.SYNC_HOT_DAYS_FORWARD ?? '14'),
       coldBatchSize: Number(process.env.SYNC_COLD_BATCH_SIZE ?? '10'),
+      maxSheetsPerCycle: Number(process.env.SYNC_MAX_SHEETS_PER_CYCLE ?? '90'),
       cursor: 0,
     });
 
@@ -77,11 +78,19 @@ async function main(): Promise<void> {
       .filter((entry) => entry.date !== null && entry.date.getTime() > today.getTime())
       .sort((a, b) => b.date!.getTime() - a.date!.getTime());
 
-    out('## Scan tiering (the office creates daily sheets in advance)');
+    out('## Scan coverage (the office creates daily sheets in advance)');
     out(`  daily sheets total: ${scan.totalDaily}`);
-    out(`  hot (every cycle):  ${scan.hot.length}`);
-    out(`  cold slice / cycle: ${scan.cold.length}`);
-    out(`  full sweep takes:   ${scan.sweepCycles} changed cycles`);
+    out(
+      scan.full
+        ? '  mode: FULL — every sheet read every cycle, no staleness.'
+        : `  mode: TIERED — ${scan.hot.length} hot, ${scan.cold.length} cold per cycle, ` +
+            `full sweep in ${scan.sweepCycles} changed cycles.`,
+    );
+    out(
+      scan.full
+        ? `  Raise SYNC_MAX_SHEETS_PER_CYCLE above ${scan.totalDaily} to keep this as the workbook grows.`
+        : '  Sheet count exceeds SYNC_MAX_SHEETS_PER_CYCLE; raise it, or accept the rotation.',
+    );
     out(`  sheets dated after today: ${futureSheets.length}`);
     if (futureSheets[0]?.date) {
       const daysAhead = Math.round(

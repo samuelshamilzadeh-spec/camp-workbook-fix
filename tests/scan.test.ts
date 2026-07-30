@@ -25,6 +25,10 @@ function plan(overrides: Partial<ScanOptions> = {}) {
     hotDaysBack: 7,
     hotDaysForward: 14,
     coldBatchSize: 10,
+    // Deliberately below the 70-sheet fixture, so these exercise the tiering.
+    // The full-scan path (the normal one for a single season) is covered
+    // separately below.
+    maxSheetsPerCycle: 30,
     cursor: 0,
     ...overrides,
   });
@@ -122,6 +126,7 @@ describe('planScan', () => {
     // empty, and waiting for the rotation would make the job look dead.
     const result = plan({
       allSheetNames: ['2025-06-01', '2025-06-02', '2025-06-03', '2025-06-04'],
+      maxSheetsPerCycle: 0,
     });
     expect(result.hot).toContain('2025-06-04');
     expect(result.hot.length).toBeGreaterThan(0);
@@ -151,7 +156,10 @@ describe('planScan', () => {
   });
 
   it('handles every sheet being hot, leaving nothing to rotate', () => {
-    const result = plan({ allSheetNames: ['2026-08-02', '2026-08-03', '2026-08-04'] });
+    const result = plan({
+      allSheetNames: ['2026-08-02', '2026-08-03', '2026-08-04'],
+      maxSheetsPerCycle: 0,
+    });
     expect(result.cold).toEqual([]);
     expect(result.hot).toHaveLength(3);
     expect(result.sweepCycles).toBe(0);
@@ -159,7 +167,57 @@ describe('planScan', () => {
 
   it('respects a widened forward window when the office works further ahead', () => {
     const sheets = ['2026-08-03', '2026-09-15'];
-    expect(plan({ allSheetNames: sheets }).hot).not.toContain('2026-09-15');
-    expect(plan({ allSheetNames: sheets, hotDaysForward: 60 }).hot).toContain('2026-09-15');
+    expect(plan({ allSheetNames: sheets, maxSheetsPerCycle: 0 }).hot).not.toContain('2026-09-15');
+    expect(
+      plan({ allSheetNames: sheets, maxSheetsPerCycle: 0, hotDaysForward: 60 }).hot,
+    ).toContain('2026-09-15');
+  });
+});
+
+describe('planScan, full-scan mode', () => {
+  // The normal case: one camp season, about 60 sheets, all read every cycle.
+  it('reads every daily sheet when the workbook is one season', () => {
+    const result = plan({ maxSheetsPerCycle: 90 });
+
+    expect(result.full).toBe(true);
+    expect(result.sheets).toHaveLength(70);
+    expect(result.cold).toEqual([]);
+    expect(result.sweepCycles).toBe(1);
+    for (const sheet of season()) expect(result.sheets).toContain(sheet);
+  });
+
+  it('reads a June sheet in the same cycle as an August one, with no rotation wait', () => {
+    // The whole point: a keyword typed onto any sheet is picked up next cycle,
+    // not on that sheet's turn.
+    const result = plan({ maxSheetsPerCycle: 90 });
+    expect(result.sheets).toContain('2026-06-01');
+    expect(result.sheets).toContain('2026-08-08');
+  });
+
+  it('still excludes queue sheets and non-daily tabs in full-scan mode', () => {
+    const result = plan({
+      allSheetNames: [...season(), 'Missing Info', 'United Refresh'],
+      maxSheetsPerCycle: 90,
+    });
+    expect(result.full).toBe(true);
+    expect(result.sheets).not.toContain('Missing Info');
+    expect(result.sheets).not.toContain('United Refresh');
+  });
+
+  it('degrades to tiering once the workbook outgrows the threshold', () => {
+    // Adding the 2027 season is what eventually trips this.
+    const twoSeasons = [...season(), ...season().map((s) => s.replace('2026', '2027'))];
+    const result = plan({ allSheetNames: twoSeasons, maxSheetsPerCycle: 90 });
+
+    expect(result.totalDaily).toBe(140);
+    expect(result.full).toBe(false);
+    expect(result.cold.length).toBeGreaterThan(0);
+    expect(result.sheets.length).toBeLessThan(140);
+  });
+
+  it('does not lose a sheet at the threshold boundary', () => {
+    const exactly = season().slice(0, 40);
+    expect(plan({ allSheetNames: exactly, maxSheetsPerCycle: 40 }).sheets).toHaveLength(40);
+    expect(plan({ allSheetNames: exactly, maxSheetsPerCycle: 39 }).full).toBe(false);
   });
 });

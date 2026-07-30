@@ -112,6 +112,11 @@ export interface ScanOptions {
   coldBatchSize: number;
   /** Rotation position carried in the checkpoint. */
   cursor: number;
+  /**
+   * Above this many daily sheets, fall back to hot/cold tiering. At or below it,
+   * every sheet is read every cycle.
+   */
+  maxSheetsPerCycle: number;
   layout?: WorkbookLayout;
 }
 
@@ -129,31 +134,39 @@ export interface ScanSelection {
   totalDaily: number;
   /** Daily-pattern sheets whose name did not parse as a date. A naming problem. */
   unparseable: string[];
+  /** True when every daily sheet is being read this cycle. */
+  full: boolean;
 }
 
 /**
- * Tiered scan.
+ * Which daily sheets to read this cycle.
  *
- * The office creates daily sheets **in advance** — on 3 August there may already
- * be sheets for the 4th through the 8th, empty until the day arrives. That rules
- * out "the N sheets with the latest dates": the latest-dated sheets are the empty
- * future ones, and today's would be crowded out.
+ * **The normal case is: all of them.** This workbook holds one camp season — a
+ * week of June, all of July, most of August, about 60 sheets — and 60 reads
+ * fits comfortably in a cycle when they run concurrently. Every sheet every
+ * cycle means a keyword typed onto any sheet, however old, is picked up within
+ * five seconds. That is the behaviour to have when it is affordable.
  *
- * It also has to cover the whole year, because a staff member can put a keyword
- * into column B on a sheet from three weeks ago at any time. But reading every
- * sheet every cycle is a few hundred Graph calls at a five-second cadence, which
- * is a throttling incident rather than a design.
+ * Two things stop this from being the whole story.
  *
- * So:
- *   - **hot** — a date window around today, in both directions so tomorrow's
- *     pre-created sheet is picked up the moment staff start filling it, plus
- *     every sheet an existing queue row references. Read every cycle.
+ * First, the office creates daily sheets **in advance** — on 3 August there may
+ * already be sheets for the 4th through the 8th, empty until their day arrives.
+ * Any scheme built on "the N sheets with the latest dates" picks those empty
+ * future sheets and crowds out the one staff are actually working in.
+ *
+ * Second, this workbook will grow. Add the 2027 season and it is 120 sheets;
+ * a few seasons and full scanning stops fitting in a five-second cycle. So above
+ * `maxSheetsPerCycle` this degrades automatically rather than falling over:
+ *
+ *   - **hot** — a date window around today, in both directions so a pre-created
+ *     sheet is live the moment staff start filling it, plus every sheet an
+ *     existing queue row references. Read every cycle.
  *   - **cold** — everything else, a fixed-size slice per cycle, rotating through
- *     the checkpointed cursor. Full-year coverage at bounded cost.
+ *     the checkpointed cursor.
  *
- * Nothing is ever excluded, only deferred: the guarantee is that every daily
- * sheet is read within `sweepCycles` changed cycles, and anything recent or
- * already queued is read immediately.
+ * Even then nothing is excluded, only deferred: every daily sheet is read within
+ * `sweepCycles` changed cycles, and anything recent or already queued stays
+ * immediate.
  */
 export function planScan(options: ScanOptions): ScanSelection {
   const layout = options.layout ?? LAYOUT;
@@ -165,6 +178,21 @@ export function planScan(options: ScanOptions): ScanSelection {
     const date = layout.parseDailySheetDate(name);
     if (date) dated.push({ name, date });
     else unparseable.push(name);
+  }
+
+  // The normal path for a single-season workbook: read everything, no rotation,
+  // no staleness, nothing to reason about.
+  if (daily.length <= Math.max(options.maxSheetsPerCycle, 0)) {
+    return {
+      hot: daily,
+      cold: [],
+      sheets: daily,
+      nextCursor: 0,
+      sweepCycles: daily.length > 0 ? 1 : 0,
+      totalDaily: daily.length,
+      unparseable,
+      full: true,
+    };
   }
 
   const todayUtc = Date.UTC(
@@ -237,5 +265,6 @@ export function planScan(options: ScanOptions): ScanSelection {
         : Math.ceil(coldPool.length / options.coldBatchSize),
     totalDaily: daily.length,
     unparseable,
+    full: false,
   };
 }

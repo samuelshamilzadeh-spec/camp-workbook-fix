@@ -205,6 +205,14 @@ export interface RuntimeConfig {
   hotDaysForward: number;
   /** Sheets pulled from the rotation each cycle, covering the rest of the year. */
   coldBatchSize: number;
+  /**
+   * At or below this many daily sheets, every sheet is read every cycle. Above
+   * it, the hot/cold tiering kicks in. Sized so one camp season scans fully and
+   * a workbook that accumulates seasons degrades instead of overrunning.
+   */
+  maxSheetsPerCycle: number;
+  /** Concurrent Graph reads. The whole point of a full scan fitting in a cycle. */
+  readConcurrency: number;
   stateConnectionString: string | undefined;
   stateContainer: string;
 }
@@ -250,6 +258,8 @@ export function loadConfig(): RuntimeConfig {
     hotDaysBack: Number(env('SYNC_HOT_DAYS_BACK') ?? '7'),
     hotDaysForward: Number(env('SYNC_HOT_DAYS_FORWARD') ?? '14'),
     coldBatchSize: Number(env('SYNC_COLD_BATCH_SIZE') ?? '10'),
+    maxSheetsPerCycle: Number(env('SYNC_MAX_SHEETS_PER_CYCLE') ?? '90'),
+    readConcurrency: Number(env('SYNC_READ_CONCURRENCY') ?? '8'),
     stateConnectionString:
       env('AZURE_STORAGE_CONNECTION_STRING') ?? env('AzureWebJobsStorage'),
     stateContainer: env('SYNC_STATE_CONTAINER') ?? 'camp-sync-state',
