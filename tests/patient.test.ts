@@ -130,3 +130,85 @@ describe('resolveFieldAcrossVisits', () => {
     expect(after).toEqual({ kind: 'no-change' });
   });
 });
+
+describe('filling blanks from a sibling visit', () => {
+  const fill = (visits: Parameters<typeof resolveFieldAcrossVisits>[0]) =>
+    resolveFieldAcrossVisits(visits, sameValue, { fillBlanks: true });
+
+  it('fills a blank visit from one that knows the answer', () => {
+    // Same patient: if July 14 has the phone and July 1 does not, July 1 gets
+    // it. 67 cells in the live workbook are in this state.
+    const result = fill([
+      { syncId: 'A', queueValue: '', sourceValue: '' },
+      { syncId: 'B', queueValue: '555-1234', sourceValue: '555-1234' },
+    ]);
+    expect(result).toMatchObject({ kind: 'fill-blanks', value: '555-1234', from: 'B' });
+    expect(result).toMatchObject({ blankVisits: ['A'] });
+  });
+
+  it('fills several blanks at once', () => {
+    expect(
+      fill([
+        { syncId: 'A', queueValue: '', sourceValue: '' },
+        { syncId: 'B', queueValue: 'aetna', sourceValue: 'aetna' },
+        { syncId: 'C', queueValue: '', sourceValue: '' },
+      ]),
+    ).toMatchObject({ kind: 'fill-blanks', blankVisits: ['A', 'C'] });
+  });
+
+  it('will not fill when two visits disagree about the answer', () => {
+    // A historical disagreement is not an instruction, and choosing between
+    // them would discard one. 72 repeat patients are in this state.
+    expect(
+      fill([
+        { syncId: 'A', queueValue: '', sourceValue: '' },
+        { syncId: 'B', queueValue: '555-1111', sourceValue: '555-1111' },
+        { syncId: 'C', queueValue: '555-2222', sourceValue: '555-2222' },
+      ]),
+    ).toEqual({ kind: 'no-change' });
+  });
+
+  it('does nothing when there is nothing blank', () => {
+    expect(
+      fill([
+        { syncId: 'A', queueValue: '555', sourceValue: '555' },
+        { syncId: 'B', queueValue: '555', sourceValue: '555' },
+      ]),
+    ).toEqual({ kind: 'no-change' });
+  });
+
+  it('leaves a lone visit alone', () => {
+    expect(fill([{ syncId: 'A', queueValue: '', sourceValue: '' }])).toEqual({ kind: 'no-change' });
+  });
+
+  it('lets a live staff edit win over back-filling', () => {
+    // An edit is someone deciding now; a blank is just absence.
+    expect(
+      fill([
+        { syncId: 'A', queueValue: '555-9999', sourceValue: '' },
+        { syncId: 'B', queueValue: '555-1111', sourceValue: '555-1111' },
+      ]),
+    ).toMatchObject({ kind: 'propagate', value: '555-9999', from: 'A' });
+  });
+
+  it('is idempotent: once filled, the next pass does nothing', () => {
+    expect(
+      fill([
+        { syncId: 'A', queueValue: '555', sourceValue: '555' },
+        { syncId: 'B', queueValue: '555', sourceValue: '555' },
+      ]),
+    ).toEqual({ kind: 'no-change' });
+  });
+
+  it('stays off unless asked', () => {
+    expect(
+      resolveFieldAcrossVisits(
+        [
+          { syncId: 'A', queueValue: '', sourceValue: '' },
+          { syncId: 'B', queueValue: '555', sourceValue: '555' },
+        ],
+        sameValue,
+      ),
+    ).toEqual({ kind: 'no-change' });
+  });
+});

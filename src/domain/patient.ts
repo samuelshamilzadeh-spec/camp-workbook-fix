@@ -91,15 +91,49 @@ export interface VisitValue {
 
 export type FieldResolution =
   | { kind: 'no-change' }
+  /** A staff edit, copied to the patient's other visits. */
   | { kind: 'propagate'; value: unknown; from: string }
+  /**
+   * Nobody edited anything, but one visit holds a value and another is blank.
+   * The office's rule: same patient, so fill it in. Only blanks are touched —
+   * a visit that already holds a different value is never overwritten this way.
+   */
+  | { kind: 'fill-blanks'; value: unknown; from: string; blankVisits: string[] }
   | { kind: 'conflict'; editedBy: string[] };
 
 export function resolveFieldAcrossVisits(
   visits: readonly VisitValue[],
   sameValue: (a: unknown, b: unknown) => boolean,
+  options: { fillBlanks?: boolean } = {},
 ): FieldResolution {
   const edits = visits.filter((visit) => !sameValue(visit.queueValue, visit.sourceValue));
-  if (edits.length === 0) return { kind: 'no-change' };
+
+  if (edits.length === 0) {
+    // No edit. If one visit knows the answer and another is blank, the office
+    // wants the blank filled — it is the same patient.
+    if (!options.fillBlanks || visits.length < 2) return { kind: 'no-change' };
+
+    const known: unknown[] = [];
+    for (const visit of visits) {
+      if (isBlank(visit.queueValue)) continue;
+      if (!known.some((value) => sameValue(value, visit.queueValue))) known.push(visit.queueValue);
+    }
+
+    // Two visits holding different values is a historical disagreement, not an
+    // instruction. Filling from either would be a guess.
+    if (known.length !== 1) return { kind: 'no-change' };
+
+    const blanks = visits.filter((visit) => isBlank(visit.queueValue));
+    if (blanks.length === 0) return { kind: 'no-change' };
+
+    const source = visits.find((visit) => !isBlank(visit.queueValue))!;
+    return {
+      kind: 'fill-blanks',
+      value: known[0],
+      from: source.syncId,
+      blankVisits: blanks.map((visit) => visit.syncId),
+    };
+  }
 
   const distinct: unknown[] = [];
   for (const edit of edits) {
