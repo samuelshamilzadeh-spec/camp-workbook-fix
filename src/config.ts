@@ -239,6 +239,8 @@ function loadEnvFileOnce(): void {
   if (!existsSync(path)) return;
 
   try {
+    const shadowed: string[] = [];
+
     for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
@@ -253,7 +255,26 @@ function loadEnvFileOnce(): void {
       ) {
         value = value.slice(1, -1);
       }
-      if (key && process.env[key] === undefined) process.env[key] = value;
+      if (!key) continue;
+
+      const existing = process.env[key];
+      if (existing === undefined) {
+        process.env[key] = value;
+      } else if (existing !== value && value !== '') {
+        // An exported shell variable silently beating the file is a genuinely
+        // confusing failure: the file looks right, gets read, and is ignored.
+        // A stale exported AZURE_CLIENT_SECRET presents as "invalid client
+        // secret" against a .env that is perfectly correct.
+        shadowed.push(key);
+      }
+    }
+
+    if (shadowed.length > 0) {
+      process.stderr.write(
+        `WARNING: ${shadowed.join(', ')} ${shadowed.length === 1 ? 'is' : 'are'} set in the ` +
+          `environment and override${shadowed.length === 1 ? 's' : ''} .env. ` +
+          `Run \`unset ${shadowed.join(' ')}\` if you meant to use the file.\n`,
+      );
     }
   } catch {
     // A malformed .env is a local-development problem, not a reason to refuse
