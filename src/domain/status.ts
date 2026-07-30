@@ -16,8 +16,22 @@ export interface QueueKeyword {
   destination: QueueSheetName;
 }
 
-/** Terminal success states. Presence anywhere in the value suppresses queuing. */
-export const TERMINAL_KEYWORDS: readonly string[] = ['ohi', 'lasante'] as const;
+/**
+ * Terminal success states. Presence anywhere in the value suppresses queuing.
+ *
+ * VERIFIED 2026-07-30 against 4,102 rows of the live workbook:
+ *   lasante 1882, ohi 756, united refuah 47.
+ *
+ * `united refuah` was not in the brief. It is a third EMR — it sits alongside
+ * `ohi` and `lasante` in column B, and the workbook has a `United Refuah` tab.
+ * Treating it as terminal is the only reading consistent with that; if it turns
+ * out to mean something else, 47 patients are affected.
+ */
+export const TERMINAL_KEYWORDS: readonly string[] = [
+  'ohi',
+  'lasante',
+  'united refuah',
+] as const;
 
 /**
  * Queued keywords in precedence order.
@@ -35,11 +49,63 @@ export const TERMINAL_KEYWORDS: readonly string[] = ['ohi', 'lasante'] as const;
  * staff type.
  */
 export const QUEUE_KEYWORDS: readonly QueueKeyword[] = [
+  // VERIFIED 2026-07-30 against 4,102 rows of the live workbook. Counts are
+  // occurrences found in column B (EMR) across the 2026 season.
+
+  // `dont accept` is what staff actually type — 214 rows. The brief's
+  // `not accepted` appears ZERO times and matches nothing. Keeping both costs
+  // nothing; dropping `dont accept` would silently unqueue 214 patients, which
+  // is the single largest gap the inspection found.
+  { keyword: 'dont accept', destination: 'Not Accepted' },
+  { keyword: "don't accept", destination: 'Not Accepted' },
+  { keyword: 'dont bill', destination: 'Not Accepted' },
   { keyword: 'not accepted', destination: 'Not Accepted' },
-  { keyword: 'missing info', destination: 'Missing Info' },
-  { keyword: 'ineligible', destination: 'Ineligible & Inactive' },
-  { keyword: 'inactive', destination: 'Ineligible & Inactive' },
-  { keyword: 'verify insurance', destination: 'Verify Insurance' },
+
+  { keyword: 'missing info', destination: 'Missing Info' }, // 105
+
+  { keyword: 'ineligible', destination: 'Ineligible & Inactive' }, // 77
+  // Observed misspelling, 1 row. Cheap to carry, and the alternative is a
+  // patient sitting in no queue at all.
+  { keyword: 'inegilible', destination: 'Ineligible & Inactive' },
+  { keyword: 'inactive', destination: 'Ineligible & Inactive' }, // 16
+
+  { keyword: 'verify insurance', destination: 'Verify Insurance' }, // 221
+] as const;
+
+/**
+ * Variants the inspection found that are NOT yet routed, because routing them
+ * would be a guess and the brief is explicit: never guess a destination.
+ *
+ * Each of these is a real patient sitting in no queue. They are listed here so
+ * the question is answerable by the office rather than lost — see the open
+ * questions in the README.
+ *
+ *   no insurance on file (5), need insurance (3), doesnt have insurance (2),
+ *   no insurance (2), need ins (1), doesnt have ins (1),
+ *   need insurance verification (1), incorrect insurance (1), invalid ins (1),
+ *   wrote paper has no ins (1), pt doesnt have insurance (1)
+ *     -> Verify Insurance, or Missing Info? Both are defensible.
+ *
+ *   skip (7), not on campium (3), not on campflow (1),
+ *   need to confirm dob (1), same w/ line NN (1)
+ *     -> unknown. `skip` may well be deliberate exclusion.
+ */
+export const UNROUTED_VARIANTS: readonly string[] = [
+  'no insurance on file',
+  'need insurance',
+  'doesnt have insurance',
+  'no insurance',
+  'need ins',
+  'doesnt have ins',
+  'need insurance verification',
+  'incorrect insurance',
+  'invalid ins',
+  'wrote paper has no ins',
+  'pt doesnt have insurance',
+  'skip',
+  'not on campium',
+  'not on campflow',
+  'need to confirm dob',
 ] as const;
 
 export type StatusOutcome =

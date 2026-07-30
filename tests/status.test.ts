@@ -81,6 +81,51 @@ describe('classifyStatus', () => {
   });
 });
 
+describe('keyword forms found in the live workbook (verified 2026-07-30)', () => {
+  // These are the forms staff actually type, taken from 4,102 rows of the real
+  // sheet. The brief's vocabulary and the office's vocabulary are not the same.
+  it('routes `dont accept`, which the brief never mentions and 214 rows use', () => {
+    expect(classifyStatus('dont accept')).toMatchObject({ destination: 'Not Accepted' });
+    expect(classifyStatus('dont accept- florida mcd')).toMatchObject({
+      destination: 'Not Accepted',
+    });
+    expect(classifyStatus('dont bill')).toMatchObject({ destination: 'Not Accepted' });
+  });
+
+  it('still routes the brief\'s `not accepted`, which appears zero times', () => {
+    expect(classifyStatus('not accepted')).toMatchObject({ destination: 'Not Accepted' });
+  });
+
+  it('treats `united refuah` as a third terminal EMR alongside ohi and lasante', () => {
+    expect(classifyStatus('united refuah').kind).toBe('terminal');
+    expect(classifyStatus('united refuah- 2nd visit from 6/15').kind).toBe('terminal');
+  });
+
+  it('catches the observed misspelling of ineligible', () => {
+    expect(classifyStatus('inegilible')).toMatchObject({
+      destination: 'Ineligible & Inactive',
+    });
+  });
+
+  it('leaves the insurance variants unrouted rather than guessing a queue', () => {
+    // Each of these is a real patient. Routing them is an office decision, and
+    // guessing wrong puts a patient in the wrong queue — worse than none.
+    for (const value of [
+      'no insurance on file',
+      'need insurance',
+      'doesnt have insurance',
+      'invalid ins',
+      'need insurance verification',
+    ]) {
+      expect(classifyStatus(value).kind).toBe('unrecognized');
+    }
+  });
+
+  it('does not treat `skip` as a queue instruction', () => {
+    expect(classifyStatus('skip').kind).toBe('unrecognized');
+  });
+});
+
 describe('isAmbiguous', () => {
   it('does not flag ineligible/inactive, which share a destination', () => {
     const outcome = classifyStatus('ineligible / inactive');

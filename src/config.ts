@@ -159,24 +159,56 @@ export const LAYOUT: WorkbookLayout = {
   },
   notesSheetName: '_SyncNotes',
   controlSheetName: '_SyncControl',
-  knownNonDailySheets: ['United Refresh', 'Claude Log'],
-  // Matches 2026-07-30, 7-30-2026, 7/30/26 and similar. Deliberately loose;
-  // narrow it once the real convention is known.
-  dailySheetPattern: /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*$/,
+  // VERIFIED 2026-07-30 against the live workbook: every tab that is not a
+  // daily visit sheet. Several are historical or superseded, kept here so the
+  // scan never mistakes one for a daily sheet.
+  knownNonDailySheets: [
+    'United Refuah',
+    'Claude Log',
+    'Cheat Sheet',
+    '_Feed',
+    '2025 Archive',
+    '2024 Archive',
+    'Missing info 25',
+    'Dont Take Ins (old)',
+    'Missing Ins info',
+    'Missing Info (New)',
+    'Not Accepted ',
+    'Ineligible & Inactive',
+  ],
+  // VERIFIED 2026-07-30: sheets are named `July 30, 2026` — long month name,
+  // no leading zero on the day, comma before the year. The ISO and US numeric
+  // forms are still accepted so a sheet added in another style is not silently
+  // skipped.
+  dailySheetPattern:
+    /^\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*$/i,
   parseDailySheetDate(sheetName: string): Date | null {
     const raw = sheetName.trim();
+
+    // `July 30, 2026`, `Jul 30 2026`, `Sept. 3, 2026`
+    const named = /^([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/i.exec(raw);
+    if (named) {
+      const month = MONTHS.indexOf(named[1]!.slice(0, 3).toLowerCase()) + 1;
+      if (month > 0) return utcDate(Number(named[3]), month, Number(named[2]));
+      return null;
+    }
+
     const iso = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(raw);
     if (iso) {
       return utcDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
     }
+
     const us = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(raw);
     if (us) {
       const year = Number(us[3]);
       return utcDate(year < 100 ? 2000 + year : year, Number(us[1]), Number(us[2]));
     }
+
     return null;
   },
 };
+
+const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
 
 function utcDate(year: number, month: number, day: number): Date | null {
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
