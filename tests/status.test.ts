@@ -96,10 +96,8 @@ describe('keyword forms found in the live workbook (verified 2026-07-30)', () =>
     expect(classifyStatus('not accepted')).toMatchObject({ destination: 'Not Accepted' });
   });
 
-  it('treats `united refuah` as a third terminal EMR alongside ohi and lasante', () => {
-    expect(classifyStatus('united refuah').kind).toBe('terminal');
-    expect(classifyStatus('united refuah- 2nd visit from 6/15').kind).toBe('terminal');
-  });
+  // Superseded by the office 2026-07-30: united refuah is its own category with
+  // its own sheet, not a terminal EMR. Covered in "office decisions" below.
 
   it('catches the observed misspelling of ineligible', () => {
     expect(classifyStatus('inegilible')).toMatchObject({
@@ -107,23 +105,8 @@ describe('keyword forms found in the live workbook (verified 2026-07-30)', () =>
     });
   });
 
-  it('leaves the insurance variants unrouted rather than guessing a queue', () => {
-    // Each of these is a real patient. Routing them is an office decision, and
-    // guessing wrong puts a patient in the wrong queue — worse than none.
-    for (const value of [
-      'no insurance on file',
-      'need insurance',
-      'doesnt have insurance',
-      'invalid ins',
-      'need insurance verification',
-    ]) {
-      expect(classifyStatus(value).kind).toBe('unrecognized');
-    }
-  });
-
-  it('does not treat `skip` as a queue instruction', () => {
-    expect(classifyStatus('skip').kind).toBe('unrecognized');
-  });
+  // The insurance wording and `skip` were deliberately unrouted until the
+  // office decided. They now have answers — see "office decisions" below.
 });
 
 describe('isAmbiguous', () => {
@@ -146,5 +129,82 @@ describe('isAmbiguous', () => {
 
   it('does not flag a single match', () => {
     expect(isAmbiguous(classifyStatus('not accepted'))).toBe(false);
+  });
+});
+
+describe('needs ohi / needs lasante — the negation trap', () => {
+  // 1,268 rows. The brief says ohi or lasante ANYWHERE means terminal, which
+  // marks every one of these as already entered into an EMR when they are
+  // precisely the rows that still need entering.
+  it('treats `needs ohi` as pending, not done', () => {
+    expect(classifyStatus('needs ohi').kind).toBe('pending');
+    expect(classifyStatus('need ohi').kind).toBe('pending');
+    expect(classifyStatus('needs ohi- put in on 7/27').kind).toBe('pending');
+    expect(classifyStatus('needs ohi- already an established pt').kind).toBe('pending');
+  });
+
+  it('treats `needs lasante` as pending, not done', () => {
+    expect(classifyStatus('needs lasante').kind).toBe('pending');
+    expect(classifyStatus('needs lasante- under esti').kind).toBe('pending');
+    expect(classifyStatus('needs lasante put in on 7/22').kind).toBe('pending');
+    expect(classifyStatus('needs lasante- uunder esti').kind).toBe('pending');
+  });
+
+  it('still treats a bare or suffixed ohi/lasante as done', () => {
+    // The suffix rule from the brief must survive: `ohi - esti` is still an OHI.
+    for (const value of ['ohi', 'ohi -pa', 'ohi on6/30', 'ohi - need a good cc',
+                         'lasante-e', 'lasante-o', 'lasante-e -pa',
+                         'lasante under esti', 'lasante-o- on tuesday', 'oop-lasante']) {
+      expect(classifyStatus(value).kind).toBe('terminal');
+    }
+  });
+
+  it('catches the observed misspelling of lasante', () => {
+    expect(classifyStatus('lasanante- e').kind).toBe('terminal');
+  });
+
+  it('produces no queue row either way, but the two are distinguishable', () => {
+    // Both are non-queued, which is why the bug was invisible. The kinds differ
+    // so outstanding work can still be counted.
+    expect(classifyStatus('needs ohi').kind).not.toBe(classifyStatus('ohi').kind);
+  });
+});
+
+describe('office decisions, 2026-07-30', () => {
+  it('leaves `skip` alone entirely — a non-billable follow-up visit', () => {
+    expect(classifyStatus('skip').kind).toBe('ignored');
+  });
+
+  it('routes no-insurance wording to Not Accepted', () => {
+    for (const value of ['no insurance on file', 'no insurance', 'need insurance',
+                         'need ins', 'doesnt have insurance', 'doesnt have ins',
+                         'pt doesnt have insurance', 'wrote paper has no ins',
+                         'incorrect insurance', 'invalid ins']) {
+      expect(classifyStatus(value)).toMatchObject({ destination: 'Not Accepted' });
+    }
+  });
+
+  it('routes campium/campflow wording to Missing Info', () => {
+    expect(classifyStatus('not on campium')).toMatchObject({ destination: 'Missing Info' });
+    expect(classifyStatus('not on campflow')).toMatchObject({ destination: 'Missing Info' });
+  });
+
+  it('sends united refuah to its own sheet rather than treating it as done', () => {
+    expect(classifyStatus('united refuah')).toMatchObject({ destination: 'United Refuah' });
+    expect(classifyStatus('united refuah- 2nd visit from 6/30')).toMatchObject({
+      destination: 'United Refuah',
+    });
+  });
+
+  it('keeps `verify insurance` ahead of the insurance wording rules', () => {
+    // `need insurance verification` contains neither `verify insurance` nor a
+    // no-insurance phrase outright; make sure the common case is unaffected.
+    expect(classifyStatus('verify insurance')).toMatchObject({ destination: 'Verify Insurance' });
+    expect(classifyStatus('verify insurance and date of birth')).toMatchObject({
+      destination: 'Verify Insurance',
+    });
+    expect(classifyStatus('verify insurance/dob')).toMatchObject({
+      destination: 'Verify Insurance',
+    });
   });
 });

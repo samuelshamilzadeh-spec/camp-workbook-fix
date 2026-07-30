@@ -62,15 +62,36 @@ no error and no failure — just 1,268 patients quietly never queued.
   data quality problem.
 - `skip` means a successful follow-up visit that cannot be billed.
 
+## Resolved by the office, 2026-07-30 (second pass)
+
+| Value | Rows | Decision |
+|---|---|---|
+| `needs ohi` / `needs lasante` | 1268 | **Leave alone.** No queue row. Classified `pending`, never `terminal`. |
+| `skip` | 11 | **Nothing at all.** No queue row, nothing moved. Classified `ignored`. |
+| `not on campium` / `not on campflow` | 4 | **Missing Info** |
+| no-insurance wording | 21 | **Not Accepted** |
+| `-pa` suffix (~120) | — | No effect on routing; the base keyword decides. |
+
+`pending` and `ignored` both produce no queue row, so they behave like
+`terminal` for queue purposes. They are separate outcome kinds anyway, because
+collapsing them is what hid the 1,268-row bug, and because a count of
+outstanding work is worth having.
+
+## Rows flagged for manual review
+
+`same w/ line NN` — one row, meaning unknown:
+
+- **`July 5, 2026` row 49**, camp `bnos naale`
+
+While locating it, the campium/campflow rows are:
+
+- `July 12, 2026` row 187, camp `tal` — `not on campflow`
+- `July 15, 2026` rows 67 and 68, camp `bnos naale` — `not on campium`
+- `July 16, 2026` row 33, camp `bnos naale` — `not on campium`
+
 ## Still open
 
-1. `needs ohi` / `needs lasante` (1,268) — queue sheet, or left alone as the
-   office's own pending state?
-2. `skip` (11) — Not Accepted, or no queue row at all?
-3. `not on campium` (3), `not on campflow` (1) — meaning unknown.
-4. `same w/ line NN` (1) — duplicate marker?
-5. The `-pa` suffix, ~120 rows (`lasante-e -pa`) — prior auth? Does it change
-   routing?
-6. `lasante-e` (1216) vs `lasante-o` (827) — reads as Esti / Osnat, given
-   `lasante under esti` and `lasante under osnat` also appear. Does the initial
-   affect routing, or is any `lasante` simply done?
+1. `lasante-e` (1216) vs `lasante-o` (827) — reads as Esti / Osnat, given
+   `lasante under esti` and `lasante under osnat` also appear. Assumed for now
+   that any `lasante` simply means done and the initial does not affect routing.
+2. The `Verify Insurance` tab still does not exist. 269 rows need it.

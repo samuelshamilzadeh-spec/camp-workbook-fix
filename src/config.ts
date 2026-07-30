@@ -17,13 +17,56 @@ export type QueueSheetName =
   | 'Verify Insurance'
   | 'Missing Info'
   | 'Not Accepted'
-  | 'Ineligible & Inactive';
+  | 'Ineligible & Inactive'
+  | 'United Refuah';
 
 export const QUEUE_SHEET_NAMES: readonly QueueSheetName[] = [
   'Verify Insurance',
   'Missing Info',
   'Not Accepted',
   'Ineligible & Inactive',
+  'United Refuah',
+] as const;
+
+/**
+ * Destinations whose rows are append-only: copied across once and then never
+ * touched again.
+ *
+ * The office confirmed United Refuah works this way — a row lands there and no
+ * change is ever sent back to the daily sheet. So write-back and clear-and-
+ * remove are both suppressed for it, and it is the reason those behaviours are
+ * per-destination rather than global.
+ */
+export const APPEND_ONLY_DESTINATIONS: readonly QueueSheetName[] = ['United Refuah'] as const;
+
+/**
+ * Where each queue lives in the live workbook, verified 2026-07-30.
+ *
+ * `Not Accepted ` really does carry a trailing space, and `Missing Info (New)`
+ * is the live tab rather than `Missing Info`. Matching is whitespace- and
+ * case-forgiving (see resolveSheetName), so these need only be close.
+ *
+ * Verify Insurance HAS NO TAB YET — 269 rows need one. Until it is created,
+ * those rows have nowhere to go and the cycle reports the queue as absent.
+ */
+export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
+  'Verify Insurance': 'Verify Insurance',
+  'Missing Info': 'Missing Info (New)',
+  'Not Accepted': 'Not Accepted',
+  'Ineligible & Inactive': 'Ineligible & Inactive',
+  'United Refuah': 'United Refuah',
+};
+
+/**
+ * Superseded or historical tabs. The office confirmed these are not live and
+ * must never be read or written.
+ */
+export const IGNORED_TABS: readonly string[] = [
+  'Missing Ins info',
+  'Missing info 25',
+  'Dont Take Ins (old)',
+  '2025 Archive',
+  '2024 Archive',
 ] as const;
 
 /**
@@ -123,6 +166,9 @@ export const REQUIRED_FIELDS: Record<QueueSheetName, readonly QueueColumn[]> = {
     'Phone Number',
     'Insurance Carrier',
   ],
+  // Append-only record rather than a work queue, so nothing is chased and
+  // nothing is shaded red.
+  'United Refuah': [],
 };
 
 /** Dark red, matching the existing mirror sheets' shading. UNVERIFIED. */

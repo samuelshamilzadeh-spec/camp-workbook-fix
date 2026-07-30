@@ -17,6 +17,34 @@ export interface QueueKeyword {
 }
 
 /**
+ * Phrases meaning "still needs to be entered", which must be tested BEFORE the
+ * terminal keywords.
+ *
+ * VERIFIED 2026-07-30: 1,268 rows — `needs ohi` 709, `needs lasante` 473,
+ * `needs lasante- under esti` 66, `need ohi` 10, plus 6 smaller variants.
+ *
+ * This is the trap in the brief's precedence rule. "`ohi` or `lasante` present,
+ * anywhere in the value, means terminal" is correct for suffixes — `ohi - esti`
+ * is still an OHI — and catastrophically wrong for a prefix that negates it.
+ * `needs ohi` contains `ohi`, so the documented rule marks every one of those
+ * 1,268 patients as already done.
+ *
+ * The office's decision: these get no queue row. They are the office's own
+ * pending state, handled by staff working forward through the month. But they
+ * are emphatically not finished, and the distinction is preserved so that a
+ * count of outstanding work is available and can never be mistaken for done.
+ */
+const PENDING_PATTERNS: readonly RegExp[] = [
+  /\bneeds?\b[^a-z]{0,4}(ohi|lasante)/,
+] as const;
+
+/**
+ * `skip` — a successful follow-up visit that cannot be billed for. Confirmed by
+ * the office: no queue row, nothing moved, no action of any kind.
+ */
+const IGNORED_KEYWORDS: readonly string[] = ['skip'] as const;
+
+/**
  * Terminal success states. Presence anywhere in the value suppresses queuing.
  *
  * VERIFIED 2026-07-30 against 4,102 rows of the live workbook:
@@ -30,8 +58,16 @@ export interface QueueKeyword {
 export const TERMINAL_KEYWORDS: readonly string[] = [
   'ohi',
   'lasante',
-  'united refuah',
+  // Observed misspelling of lasante, 1 row.
+  'lasanante',
 ] as const;
+
+/**
+ * `united refuah` is NOT terminal. The office confirmed it is its own category
+ * with its own sheet: rows are copied across and then never change. It is
+ * therefore a queue destination whose rows are append-only — see
+ * QUEUE_ONLY_DESTINATIONS in config.ts.
+ */
 
 /**
  * Queued keywords in precedence order.
@@ -69,47 +105,42 @@ export const QUEUE_KEYWORDS: readonly QueueKeyword[] = [
   { keyword: 'inegilible', destination: 'Ineligible & Inactive' },
   { keyword: 'inactive', destination: 'Ineligible & Inactive' }, // 16
 
-  { keyword: 'verify insurance', destination: 'Verify Insurance' }, // 221
+  { keyword: 'verify insurance', destination: 'Verify Insurance' }, // 269
+
+  // Confirmed by the office 2026-07-30: no-insurance wording is Not Accepted.
+  { keyword: 'no insurance', destination: 'Not Accepted' },
+  { keyword: 'need insurance', destination: 'Not Accepted' },
+  { keyword: 'need ins', destination: 'Not Accepted' },
+  { keyword: 'doesnt have insurance', destination: 'Not Accepted' },
+  { keyword: "doesn't have insurance", destination: 'Not Accepted' },
+  { keyword: 'doesnt have ins', destination: 'Not Accepted' },
+  { keyword: 'has no ins', destination: 'Not Accepted' },
+  { keyword: 'incorrect insurance', destination: 'Not Accepted' },
+  { keyword: 'invalid ins', destination: 'Not Accepted' },
+
+  // Confirmed by the office: the campium/campflow wording is Missing Info.
+  { keyword: 'not on campium', destination: 'Missing Info' },
+  { keyword: 'not on campflow', destination: 'Missing Info' },
+
+  // Its own sheet, append-only. Listed last so a cell naming both an EMR and a
+  // real queue keyword still routes to the queue.
+  { keyword: 'united refuah', destination: 'United Refuah' },
 ] as const;
 
-/**
- * Variants the inspection found that are NOT yet routed, because routing them
- * would be a guess and the brief is explicit: never guess a destination.
- *
- * Each of these is a real patient sitting in no queue. They are listed here so
- * the question is answerable by the office rather than lost — see the open
- * questions in the README.
- *
- *   no insurance on file (5), need insurance (3), doesnt have insurance (2),
- *   no insurance (2), need ins (1), doesnt have ins (1),
- *   need insurance verification (1), incorrect insurance (1), invalid ins (1),
- *   wrote paper has no ins (1), pt doesnt have insurance (1)
- *     -> Verify Insurance, or Missing Info? Both are defensible.
- *
- *   skip (7), not on campium (3), not on campflow (1),
- *   need to confirm dob (1), same w/ line NN (1)
- *     -> unknown. `skip` may well be deliberate exclusion.
- */
-export const UNROUTED_VARIANTS: readonly string[] = [
-  'no insurance on file',
-  'need insurance',
-  'doesnt have insurance',
-  'no insurance',
-  'need ins',
-  'doesnt have ins',
-  'need insurance verification',
-  'incorrect insurance',
-  'invalid ins',
-  'wrote paper has no ins',
-  'pt doesnt have insurance',
-  'skip',
-  'not on campium',
-  'not on campflow',
-  'need to confirm dob',
-] as const;
+
 
 export type StatusOutcome =
+  /** Column B is empty: the patient has not been processed yet. */
   | { kind: 'blank' }
+  /**
+   * `needs ohi` / `needs lasante` — still waiting to be entered into an EMR.
+   * Distinct from `terminal` even though neither produces a queue row, because
+   * conflating the two is what marked 1,268 patients as finished.
+   */
+  | { kind: 'pending'; matched: string[] }
+  /** `skip` — a successful follow-up visit that cannot be billed. No action. */
+  | { kind: 'ignored'; matched: string[] }
+  /** Entered into an EMR successfully. */
   | { kind: 'terminal'; matched: string[] }
   | { kind: 'queued'; destination: QueueSheetName; keyword: string; matched: string[] }
   | { kind: 'unrecognized' };
@@ -150,20 +181,30 @@ export function classifyStatus(raw: unknown): StatusOutcome {
 
   const matched = allMatches(normalized);
 
-  // 1. Terminal wins outright, whatever suffix follows and whatever else the
-  //    cell contains.
+  // 1. "needs ohi" before "ohi". A prefix that negates has to beat the terminal
+  //    check, or 1,268 outstanding patients read as finished.
+  if (PENDING_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { kind: 'pending', matched };
+  }
+
+  // 2. Deliberate no-ops.
+  if (IGNORED_KEYWORDS.some((k) => normalized.includes(k))) {
+    return { kind: 'ignored', matched };
+  }
+
+  // 3. Terminal wins over any queue keyword, whatever suffix follows.
   if (TERMINAL_KEYWORDS.some((k) => normalized.includes(k))) {
     return { kind: 'terminal', matched };
   }
 
-  // 2. First queued keyword in table order.
+  // 4. First queued keyword in table order.
   for (const { keyword, destination } of QUEUE_KEYWORDS) {
     if (normalized.includes(keyword)) {
       return { kind: 'queued', destination, keyword, matched };
     }
   }
 
-  // 3. Unrecognized is never guessed at.
+  // 5. Unrecognized is never guessed at.
   return { kind: 'unrecognized' };
 }
 

@@ -1,4 +1,5 @@
 import {
+  APPEND_ONLY_DESTINATIONS,
   LAYOUT,
   QUEUE_ONLY_COLUMNS,
   REQUIRED_FIELDS,
@@ -200,6 +201,11 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
         continue;
       }
 
+      // An append-only destination is a record, not a work queue: the office
+      // confirmed a United Refuah row is copied across and then never changes,
+      // and nothing is ever sent back to the daily sheet.
+      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+
       // Same queue: reconcile field values. A staff edit on the queue sheet is
       // authoritative and gets copied back to the daily sheet. Notes and the
       // Source Row link stay put.
@@ -267,6 +273,8 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     // column at all. Until that is settled this uses the conservative reading —
     // the whole row blanked — because it cannot misfire, whereas keying deletion
     // off a single column would delete rows on a stray backspace.
+    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+
     if (rowLooksCleared(queueRow)) {
       intents.push({
         kind: 'remove-queue-row',
