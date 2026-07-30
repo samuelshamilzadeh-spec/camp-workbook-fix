@@ -14,6 +14,19 @@ import type { QueueSheetName } from '../config';
 export interface QueueKeyword {
   keyword: string;
   destination: QueueSheetName;
+  /**
+   * When set, this decides the match instead of plain containment.
+   *
+   * Needed for short abbreviations: a bare `includes('urh')` would fire on any
+   * future value that happens to contain those three letters in sequence, and
+   * a patient routed to the wrong queue by an accidental substring is exactly
+   * the silent failure this project exists to avoid.
+   */
+  pattern?: RegExp;
+}
+
+function keywordMatches(entry: QueueKeyword, normalized: string): boolean {
+  return entry.pattern ? entry.pattern.test(normalized) : normalized.includes(entry.keyword);
 }
 
 /**
@@ -148,7 +161,14 @@ export const QUEUE_KEYWORDS: readonly QueueKeyword[] = [
 
   // Its own sheet, append-only. Listed last so a cell naming both an EMR and a
   // real queue keyword still routes to the queue.
+  //
+  // The office confirmed staff write it either way round: `united refuah` or
+  // the abbreviation `urh`, case-insensitively. `urh` is matched on word
+  // boundaries rather than as a substring — three letters are far too short to
+  // match loosely. It did not appear anywhere in the 5,025 rows scanned on
+  // 2026-07-30, so it is either newer or rare, but it costs nothing to accept.
   { keyword: 'united refuah', destination: 'United Refuah' },
+  { keyword: 'urh', destination: 'United Refuah', pattern: /(^|[^a-z])urh([^a-z]|$)/ },
 ] as const;
 
 
@@ -193,8 +213,8 @@ export function allMatches(normalized: string): string[] {
   for (const keyword of TERMINAL_KEYWORDS) {
     if (normalized.includes(keyword)) found.push(keyword);
   }
-  for (const { keyword } of QUEUE_KEYWORDS) {
-    if (normalized.includes(keyword)) found.push(keyword);
+  for (const entry of QUEUE_KEYWORDS) {
+    if (keywordMatches(entry, normalized)) found.push(entry.keyword);
   }
   return found;
 }
@@ -222,9 +242,9 @@ export function classifyStatus(raw: unknown): StatusOutcome {
   }
 
   // 4. First queued keyword in table order.
-  for (const { keyword, destination } of QUEUE_KEYWORDS) {
-    if (normalized.includes(keyword)) {
-      return { kind: 'queued', destination, keyword, matched };
+  for (const entry of QUEUE_KEYWORDS) {
+    if (keywordMatches(entry, normalized)) {
+      return { kind: 'queued', destination: entry.destination, keyword: entry.keyword, matched };
     }
   }
 

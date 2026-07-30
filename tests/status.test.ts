@@ -257,3 +257,20 @@ describe('multi-match reporting stays useful', () => {
     expect(isAmbiguous(classifyStatus('ohi but also missing info'))).toBe(true);
   });
 });
+
+describe('United Refuah abbreviation', () => {
+  it('accepts either spelling, case-insensitively', () => {
+    for (const value of ['united refuah', 'urh', 'URH', 'Urh', 'sent to urh', 'urh - 2nd visit']) {
+      expect(classifyStatus(value)).toMatchObject({ destination: 'United Refuah' });
+    }
+  });
+
+  it('does not fire on three letters buried inside another word', () => {
+    // A bare substring match on `urh` would route any of these to a queue, and
+    // a patient in the wrong queue on an accidental letter sequence is the kind
+    // of silent misfile that is very hard to notice afterwards.
+    for (const value of ['churhill', 'burht', 'urhx', 'xurh']) {
+      expect(classifyStatus(value).kind).toBe('unrecognized');
+    }
+  });
+});

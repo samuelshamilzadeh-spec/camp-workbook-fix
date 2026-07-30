@@ -77,13 +77,20 @@ export const IGNORED_TABS: readonly string[] = [
 ] as const;
 
 /**
- * Queue sheet column order, from the brief. Notes sits immediately after Source
- * Row, ahead of the patient fields.
+ * Queue sheet columns, VERIFIED 2026-07-30 against the live tabs.
+ *
+ * `Date of Visit` and `Source Row`, then every patient field from the daily
+ * sheet, D through R, in the same order. Nothing is dropped: the office
+ * confirmed the whole row transfers, insurance ids and medical detail included.
+ *
+ * NOTE ON `Notes`: the brief places it immediately after `Source Row`. No live
+ * queue tab has it, so it is not here yet. Adding it in Phase 5 shifts every
+ * column after B one to the right, which is a migration across all five tabs
+ * rather than an edit to this list — do them together.
  */
 export const QUEUE_COLUMNS = [
   'Date of Visit',
   'Source Row',
-  'Notes',
   'Last Name',
   'First Name',
   'Date of Birth',
@@ -94,12 +101,20 @@ export const QUEUE_COLUMNS = [
   'Zip Code',
   'Phone Number',
   'Insurance Carrier',
+  'Insurance ID #',
+  'Medicaid #',
+  'Medical History',
+  'Medications',
+  'Allergies',
 ] as const;
 
 export type QueueColumn = (typeof QUEUE_COLUMNS)[number];
 
-/** Columns staff may edit on a queue sheet that must NOT propagate back to the daily sheet. */
-export const QUEUE_ONLY_COLUMNS: readonly QueueColumn[] = ['Notes', 'Source Row'] as const;
+/**
+ * Columns that live only on the queue sheet and must NOT propagate back to the
+ * daily sheet. `Notes` joins this list when it is added in Phase 5.
+ */
+export const QUEUE_ONLY_COLUMNS: readonly QueueColumn[] = ['Date of Visit', 'Source Row'] as const;
 
 export interface DailySheetLayout {
   /** 1-based row holding the column headers. UNVERIFIED. */
@@ -188,6 +203,11 @@ export const LAYOUT: WorkbookLayout = {
     statusColumn: 'B',
     campColumn: 'C',
     syncIdColumn: 'BA',
+    // VERIFIED 2026-07-30 against the live header row:
+    // A LABS | B EMR | C CAMP NAME | D LAST Nm | E FIRST Nm | F DOB | G GENDER |
+    // H BILLING ADDRESS | I CITY | J St | K ZIP | L PHONE NUMBER |
+    // M INS CARRIER | N INS ID # | O Medicaid # | P MEDICAL HISTORY | Q MEDS |
+    // R ALLERGIES
     fieldColumns: {
       'Last Name': 'D',
       'First Name': 'E',
@@ -199,6 +219,11 @@ export const LAYOUT: WorkbookLayout = {
       'Zip Code': 'K',
       'Phone Number': 'L',
       'Insurance Carrier': 'M',
+      'Insurance ID #': 'N',
+      'Medicaid #': 'O',
+      'Medical History': 'P',
+      Medications: 'Q',
+      Allergies: 'R',
     },
   },
   queue: {

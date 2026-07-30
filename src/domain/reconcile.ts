@@ -306,8 +306,6 @@ function buildAppend(
   const values: Partial<Record<QueueColumn, unknown>> = { ...row.fields };
   values['Date of Visit'] = row.sheet;
   values['Source Row'] = `${row.sheet}!${layout.daily.statusColumn}${row.row}`;
-  // Notes live only on the queue sheet and are never seeded from the source.
-  values['Notes'] = '';
 
   const blankRequired = REQUIRED_FIELDS[destination].filter((field) =>
     isBlank(values[field]),

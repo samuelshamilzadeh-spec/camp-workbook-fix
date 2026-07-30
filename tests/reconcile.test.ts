@@ -50,7 +50,6 @@ function queueRange(
   entries: ({ kind: 'header'; camp: string; count: number } | {
     kind: 'row';
     dateOfVisit?: string;
-    notes?: string;
     last?: string;
     first?: string;
     dob?: string;
@@ -71,13 +70,14 @@ function queueRange(
     if (entry.kind === 'header') {
       cells[0] = `${entry.camp} - ${entry.count} patients`;
     } else {
+      // Queue layout verified against the live tabs: A Date of Visit,
+      // B Source Row, then the daily sheet's D-R in order.
       cells[0] = entry.dateOfVisit ?? null;
-      cells[2] = entry.notes ?? null;
-      cells[3] = entry.last ?? null;
-      cells[4] = entry.first ?? null;
-      cells[5] = entry.dob ?? null;
-      cells[11] = entry.phone ?? null;
-      cells[12] = entry.carrier ?? null;
+      cells[2] = entry.last ?? null;
+      cells[3] = entry.first ?? null;
+      cells[4] = entry.dob ?? null;
+      cells[10] = entry.phone ?? null;
+      cells[11] = entry.carrier ?? null;
       cells[52] = entry.syncId ?? null;
     }
     grid.push(cells);
@@ -126,8 +126,6 @@ describe('reconcile', () => {
     expect(append.camp).toBe('Camp Ramah');
     expect(append.values['Date of Visit']).toBe('2026-07-30');
     expect(append.values['Source Row']).toBe('2026-07-30!B2');
-    // Notes are never seeded from the source.
-    expect(append.values['Notes']).toBe('');
     // Phone is blank and required for Missing Info, so it gets red shading.
     expect(append.blankRequired).toContain('Phone Number');
     expect(append.blankRequired).not.toContain('Last Name');
@@ -208,7 +206,6 @@ describe('reconcile', () => {
               first: 'A',
               dob: 'x',
               phone: '555-1234',
-              notes: 'called mom, left voicemail',
               syncId: 'S000000000001',
             },
           ]),
