@@ -465,12 +465,16 @@ export function planCountRefresh(
     });
   }
 
-  if (sheet.totalRow !== undefined && sheet.totalDeclared !== sheet.rows.length) {
+  // The office's own tabs have no TOTAL line, so one is added below the body the
+  // first time this runs. A plain write past the last used row — nothing is
+  // inserted and nothing moves. Once it exists the branch above keeps it current.
+  const totalRow = sheet.totalRow ?? Math.max(sheet.lastRow, sheet.firstDataRow - 1) + 1;
+  if (sheet.totalDeclared !== sheet.rows.length) {
     operations.push({
       kind: 'write-cells',
-      address: rangeAddress(first, sheet.totalRow, first, sheet.totalRow),
+      address: rangeAddress(first, totalRow, first, totalRow),
       values: [[formatGrandTotal(sheet.rows.length)]],
-      row: sheet.totalRow,
+      row: totalRow,
       count: 1,
       purpose: 'total',
     });

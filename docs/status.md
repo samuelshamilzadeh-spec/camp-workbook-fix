@@ -43,6 +43,21 @@ and both now plan nothing on a re-run. Remaining: `Not Accepted ` (11),
 `--allow-inserts`, the first time this project shifts a live row.
 See [`docs/phase2b.md`](phase2b.md).
 
+### Phase 2c — the Resolved column and the house style — DONE on all five tabs
+`Resolved` sits between `Source Row` and `Last Name` on the four work queues and
+is absent from `United Refuah`. Marking a row `Done` writes the fix back to the
+daily sheet, clears column B at source and deletes the queue row —
+`npm run resolve-rows`, dry run by default. Nothing is marked yet, so it has
+not been run for real.
+
+All five tabs carry the house style: dark header bar, camp bands, TOTAL line,
+`mm/dd/yyyy` dates, centred `Source Row`, sized columns. `npm run migrate` applies
+it and doubles as a redraw.
+
+**Two things Graph refuses** against this workbook and are manual one-offs per
+tab: freezing the header row, and the `Resolved` dropdown. Neither is
+load-bearing.
+
 ### Three live defects the first runs exposed — all fixed
 - **The queue header row is row 1, not row 9.** The brief's instruction-block
   layout does not exist. Reading from row 10 hid rows 2-9 of every mirror tab —
@@ -57,6 +72,10 @@ See [`docs/phase2b.md`](phase2b.md).
   that was the stale row, it planned an append to the queue the patient was
   already on. Caught by re-running the appender against a tab just written; the
   index now keeps every row an ID appears on.
+- **Writing `null` does not clear a cell.** Graph returns 200 and leaves it
+  untouched; only the `/clear` action empties it. This would have made the
+  resolve flow's "clear column B at source" step silently do nothing, so every
+  resolved patient came straight back. Found before it ran.
 
 **Adoption re-run: 19 of 20 unlinked rows stamped.** Two orphans remain, both
 needing a human — one `identity-mismatch`, one `unknown-sync-id`.

@@ -89,13 +89,16 @@ reviewable before a single cell changes.
 
 Measured after the United Refuah run, with both defects above corrected:
 
-| Queue | Rows to append | Tab state | Inserts needed |
+| Queue | Rows to append | Tab state | Migrated |
 |---|---|---|---|
-| `United Refuah` | 0 | **done** — 85 rows, 13 camps | — |
-| `Verify Insurance` | 0 | **done** — 243 rows, 17 camps | — |
+| `United Refuah` | 0 | **done** — 85 rows, 13 camps | yes |
+| `Verify Insurance` | 0 | **done** — 243 rows, 17 camps | yes |
 | `Not Accepted ` | 11 | 400 live rows | yes |
 | `Ineligible & Inactive` | 5 | 1,221 live rows | yes |
 | `Missing Info` | 1 | 229 live rows | yes |
+
+All five now carry the house style, real dates and — on the four work queues —
+the `Resolved` column. The 17 remaining appends need `--allow-inserts`.
 
 The two done tabs were empty, so every row landed past the end and no gap was
 opened. The remaining 17 rows all need `--allow-inserts`, which will be the
@@ -185,3 +188,99 @@ which happened, and **the applier refuses to write when the shape was guessed.**
 - **A camp with no name gets a block labelled `(no camp)`.** Ugly on purpose:
   the label has to equal what `campKey` produces for a missing camp, or the next
   run would not recognize its own block and would write another one below it.
+
+---
+
+# The Resolved column, and what it costs
+
+Added 2026-07-31, and applied to all five tabs.
+
+## How a row leaves a queue
+
+A staff member fills in whatever was missing on the queue row, marks `Resolved`,
+and `npm run resolve-rows -- --apply` does three things in an order that is not
+negotiable:
+
+1. **Writes the fix back to the daily sheet.** Until this runs, the queue row is
+   the only place that phone number exists. Deleting first would destroy the work
+   the marker is reporting.
+2. **Clears column B at the source.** The reconciler decides everything from what
+   column B says right now, so a row still reading `missing info` is re-appended
+   within seconds. Blank means "not processed yet", which returns the patient to
+   the office's normal flow to be entered into an EMR.
+3. **Deletes the queue row**, whole-row, bottom-up per tab — deleting row 40
+   moves row 41 up into it, so a top-down pass would delete the wrong patient
+   from the second row onwards.
+
+The marker is an allow-list: `done`, `yes`, `y`, `x`, `fixed`, `complete`,
+`completed`, `resolved`, `true`, `✓`. Anything else in that cell is **reported
+and never acted on**. Treating any non-blank cell as a signal would mean a stray
+keystroke silently pulls a patient off the queue and wipes their status at
+source, and the column sits right next to Last Name.
+
+`United Refuah` has no `Resolved` column. It is an append-only record — a row
+lands there and never changes — so there is nothing to resolve, and the marker
+would only be a cell nobody should touch. That makes the column layout
+per-destination: 18 columns on the work queues, 17 there.
+
+## Two things Graph will not do
+
+Both were built, both were rejected by the API against this workbook, and both
+are now one-off manual settings that live in the file once set:
+
+| Wanted | What happens | Do this instead, once per tab |
+|---|---|---|
+| Freeze the header row | 400 on every spelling of `freezePanes` | View > Freeze Panes > Freeze Top Row |
+| `Resolved` dropdown | 400 on `dataValidation`, even on a GET | Data > Data Validation > List > `Done` |
+
+Neither is load-bearing. The allow-list accepts the words staff type, so the
+marker works with or without a dropdown to click.
+
+## Writing null does not clear a cell
+
+Graph accepts a values PATCH containing nulls, returns 200, and leaves every one
+of those cells exactly as it was. Verified directly: three cells holding SyncIDs,
+PATCHed with `[[null],[null],[null]]`, still held them; the `/clear` action
+emptied them.
+
+This was found cleaning up after the column insert and it mattered a great deal
+more than it looked. Step 2 above — clearing column B — was written as a null.
+It would have returned 200, done nothing, left the keyword in place, and the
+patient would have come back on every cycle forever. Anything that needs a cell
+to become empty goes through `Workbook.clearRange`.
+
+## The column insert moves more than you think
+
+Inserting `Resolved` at C shifts **every** column to its right, which is the
+correct behaviour and the reason a whole-column insert was used rather than
+rewriting a fixed window of A..Q: `Ineligible & Inactive` carries
+`Updated Insurance Carrier`, `Updated Insurance ID #` and `Updated Medicaid #`
+out at R, S and T, and a windowed rewrite would have destroyed them. They moved
+to S, T and U, intact.
+
+It also shifts `BA` — the SyncID column — to `BB`, which would leave every link
+between a queue row and its patient's daily row in a column nothing reads. The
+migration reads the IDs first, puts them back in `BA` afterwards, and clears
+`BB`. Confirmed after all five tabs: orphans unchanged at 2, appends unchanged
+at 17.
+
+## The house style
+
+In `STYLE`, drawn by `src/domain/style.ts`, applied by `npm run migrate`:
+
+- one dark header bar (`#051C2C`), white and bold
+- horizontal hairlines only — vertical lines are what make a sheet look like a
+  form rather than a table
+- camp dividers as quiet bands (`#E8EBEE`), bold, the width of the table
+- the grand total set apart by weight and a rule, not by colour
+- `Source Row`, `Resolved`, `Gender` and `State` centred; everything else left
+- `Date of Visit` and `Date of Birth` as real dates, `mm/dd/yyyy`
+- every column sized to what it holds
+
+Subtractive on purpose. The one loud thing stays loud: the office's red on a
+blank required field is the only colour that catches the eye.
+
+`migrate` doubles as a redraw, because the divider and TOTAL counts are snapshots
+and go stale the moment a row is removed. It also converts the office's bare camp
+labels (`Achim`) into counted ones (`Achim - 6 patients`) and adds the TOTAL line
+none of their tabs had.

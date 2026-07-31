@@ -7,6 +7,7 @@ import {
 } from '../src/config';
 import {
   NO_CAMP_LABEL,
+  planCountRefresh,
   planQueueAppend,
   type InsertRowsOperation,
   type QueueOperation,
@@ -497,5 +498,55 @@ describe('blank required fields', () => {
       appends: [intent('United Refuah', 'Achim')],
     });
     expect(plan.operations.some((op) => op.kind === 'shade')).toBe(false);
+  });
+});
+
+describe('planCountRefresh', () => {
+  it('rewrites a bare camp name as a counted divider', () => {
+    // The office's own tabs label a block with just the camp name. The count is
+    // part of the design, so a bare name is treated as a divider declaring zero
+    // and rewritten with what the block actually holds.
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'header' },
+        { kind: 'divider', camp: 'Achim', count: 0 },
+        { kind: 'row' },
+        { kind: 'row' },
+      ]),
+    );
+    const operations = planCountRefresh(sheet);
+    expect(operations.find((op) => op.purpose === 'divider')).toMatchObject({
+      address: 'A2:A2',
+      values: [['Achim - 2 patients']],
+    });
+  });
+
+  it('adds a TOTAL below the body when the tab has none', () => {
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'header' },
+        { kind: 'divider', camp: 'Achim', count: 1 },
+        { kind: 'row' },
+      ]),
+    );
+    expect(planCountRefresh(sheet).find((op) => op.purpose === 'total')).toMatchObject({
+      address: 'A4:A4',
+      values: [['TOTAL - 1 patient']],
+    });
+  });
+
+  it('plans nothing on a sheet whose counts are already right', () => {
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'header' },
+        { kind: 'divider', camp: 'Achim', count: 1 },
+        { kind: 'row' },
+        { kind: 'total', count: 1 },
+      ]),
+    );
+    expect(planCountRefresh(sheet)).toEqual([]);
   });
 });
