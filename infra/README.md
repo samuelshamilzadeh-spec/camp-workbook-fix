@@ -10,9 +10,18 @@ identity with Storage Blob Data Contributor on its own state container.
 
 ## Order
 
+Run this **from the repo directory**, not from your home directory — the
+template path is relative.
+
+**Single quotes around the drive id.** It contains a `!`, and inside double
+quotes bash treats that as history expansion and fails with
+`event not found` before Azure ever sees the command.
+
 ```bash
+cd /path/to/camp-workbook-fix
+
 RG=camp-workbook-sync
-APP=camp-workbook-sync
+APP=camp-workbook-sync                              # must be globally unique
 CLIENT_ID=27e61a22-9b04-4124-a5e0-5b691f0435c4      # the Entra app registration
 
 az group create --name "$RG" --location eastus
@@ -20,10 +29,16 @@ az group create --name "$RG" --location eastus
 az deployment group create \
   --resource-group "$RG" \
   --template-file infra/main.bicep \
-  --parameters appName="$APP" graphClientId="$CLIENT_ID" \
-               graphDriveId="<from npm run resolve>" \
-               graphItemId="<from npm run resolve>"
+  --parameters appName="$APP" \
+               graphClientId="$CLIENT_ID" \
+               graphDriveId='<from npm run resolve>' \
+               graphItemId='<from npm run resolve>'
 ```
+
+`appName` becomes `appName.azurewebsites.net`, so it has to be unique across
+Azure. If the deployment fails on the site name, pick another — nothing else
+depends on it. The storage account name is derived from the resource group id
+rather than from `appName`, precisely so that one cannot collide.
 
 The deployment prints a `grantGraphPermission` command. **Run it as an admin** —
 Bicep cannot assign an app role on Microsoft Graph, so the identity has no access

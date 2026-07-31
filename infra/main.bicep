@@ -57,7 +57,11 @@ param syncLayoutVerified string = 'false'
 @description('Cap on Application Insights ingestion. The bill lives here.')
 param appInsightsDailyCapGb int = 1
 
-var storageName = toLower(replace('${appName}st', '-', ''))
+// Storage account names are globally unique across all of Azure, so a readable
+// one derived from appName is a coin flip on whether the deployment fails at the
+// last step. Derived from the resource group id instead: stable across re-runs of
+// the same deployment, unique against everyone else's.
+var storageName = take('st${uniqueString(resourceGroup().id)}${replace(toLower(appName), '-', '')}', 24)
 var identityName = '${appName}-id'
 var planName = '${appName}-plan'
 var insightsName = '${appName}-ai'
@@ -200,11 +204,9 @@ output identityPrincipalId string = identity.properties.principalId
 output identityClientId string = identity.properties.clientId
 
 @description('Run this as an admin. Bicep cannot grant a Microsoft Graph app role.')
-output grantGraphPermission string = join(
-  [
-    'az ad app permission add --id ${graphClientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 75359482-378d-4052-8f01-80520e7db3cd=Role'
-    '&& az ad app permission admin-consent --id ${graphClientId}'
-    '&& echo "Then grant Files.ReadWrite.All to the managed identity principal ${identity.properties.principalId}"'
-  ],
-  ' '
-)
+output grantGraphPermission string = 'az ad app permission add --id ${graphClientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 75359482-378d-4052-8f01-80520e7db3cd=Role && az ad app permission admin-consent --id ${graphClientId}'
+
+@description('The managed identity that needs Files.ReadWrite.All on Microsoft Graph.')
+output identityNeedsGraphRole string = 'Grant Files.ReadWrite.All to principal ${identity.properties.principalId} (see infra/README.md)'
+
+output storageAccountName string = storage.name
