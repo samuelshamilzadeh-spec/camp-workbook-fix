@@ -75,11 +75,19 @@ Not started. Adding `Notes` shifts every column right on all five tabs again;
 `scripts/migrate-queue.ts` is now the tool for that and its guard is structural,
 so it can be pointed at the job.
 
-### Azure infrastructure — written, never deployed
-[`infra/main.bicep`](../infra/main.bicep) creates the lot: Consumption plan,
-storage, Log Analytics with a daily cap, Application Insights, Function App, and
-a user-assigned managed identity so there is **no client secret**. Nobody has run
-it. **Nothing runs on a timer.** See [`infra/README.md`](../infra/README.md).
+### Azure infrastructure — DEPLOYED 2026-07-31, code not yet published
+Resource group `camp-workbook-sync` in eastus holds all eight resources:
+Consumption plan, storage `ste24s24d74i4egcampworkb` with the state container,
+Log Analytics capped at 1 GB/day, Application Insights, the Function App, and a
+user-assigned managed identity.
+
+**The code has not been published to it and nothing runs on a timer yet.**
+
+The identity cannot reach the workbook until a Global Administrator assigns it
+`Files.ReadWrite.All` on Microsoft Graph — Bicep cannot do that. Until then the
+Function App uses the app registration's client secret, which already carries
+that permission. Both routes and the swap between them are in
+[`infra/README.md`](../infra/README.md).
 
 ## Before the timer is enabled
 

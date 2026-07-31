@@ -40,7 +40,33 @@ Azure. If the deployment fails on the site name, pick another — nothing else
 depends on it. The storage account name is derived from the resource group id
 rather than from `appName`, precisely so that one cannot collide.
 
-## The grant, which is the step that actually matters
+## Do you have a Global Admin awake?
+
+If not, **skip the next section entirely** and use the client secret. The
+managed identity is the better long-term answer and it is what this template
+deploys, but it needs an app role assignment on Microsoft Graph that only a
+Global Administrator or Privileged Role Administrator can make. Discovering that
+after the resources are up, at four in the morning, is a bad time to discover it.
+
+The app registration already holds `Files.ReadWrite.All` with admin consent —
+it is what every CLI script in this repo authenticates with — so the Function
+App can use the same credential today and be moved to the identity later
+without a redeploy:
+
+```bash
+az functionapp config appsettings set -g "$RG" -n "$APP" \
+  --settings AZURE_USE_MANAGED_IDENTITY=false AZURE_CLIENT_SECRET='<the secret>'
+```
+
+That is no worse than the status quo — the same credential, the same scope, in
+a place designed to hold it. Moving to the identity afterwards is:
+
+```bash
+az functionapp config appsettings set -g "$RG" -n "$APP" --settings AZURE_USE_MANAGED_IDENTITY=true
+az functionapp config appsettings delete -g "$RG" -n "$APP" --setting-names AZURE_CLIENT_SECRET
+```
+
+## The grant, for when an admin is available
 
 The Function App authenticates as its **managed identity**, not as the app
 registration. That distinction is easy to miss and it is the whole difference
