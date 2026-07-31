@@ -38,9 +38,7 @@ export interface StyleOperation {
     | 'font'
     | 'format'
     | 'border'
-    | 'number-format'
-    | 'validation'
-    | 'freeze';
+    | 'number-format';
   address: string;
   /** Human-readable purpose, for the dry-run report. */
   what: string;
@@ -60,8 +58,6 @@ export interface StyleOperation {
     weight?: 'Hairline' | 'Thin' | 'Medium' | 'Thick';
   };
   numberFormat?: { format: string; rows: number; columns: number };
-  validation?: { values: string[] };
-  freeze?: { rows: number };
 }
 
 export interface StylePlan {
@@ -131,7 +127,11 @@ export function planQueueStyle(input: PlanQueueStyleInput): StylePlan {
     what: 'rule under the header',
     border: { edge: 'EdgeBottom', style: 'Continuous', color: STYLE.headerFill, weight: 'Medium' },
   });
-  add({ kind: 'freeze', address: headerRange, what: 'freeze the header', freeze: { rows: header } });
+  // NOT DONE HERE: freezing the header row. Graph's v1.0 workbook API rejects
+  // `freezePanes/freezeRows`, `freezePanes/freezeAt` and every spelling in
+  // between with a 400 against this workbook. It is a one-off that persists in
+  // the file, so it is set by hand once per tab — View > Freeze Panes > Freeze
+  // Top Row — rather than left here as a call that fails on every run.
 
   // --- The body -------------------------------------------------------------
   if (bodyLast >= bodyFirst) {
@@ -259,17 +259,18 @@ export function planQueueStyle(input: PlanQueueStyleInput): StylePlan {
     });
   }
 
-  // --- The Resolved dropdown ------------------------------------------------
-  const resolvedIndex = columns.indexOf('Resolved');
-  if (resolvedIndex !== -1 && bodyLast >= bodyFirst) {
-    const letter = offsetColumn(first, resolvedIndex);
-    add({
-      kind: 'validation',
-      address: rangeAddress(letter, bodyFirst, letter, bodyLast),
-      what: 'Resolved dropdown',
-      validation: { values: [RESOLVED_DROPDOWN_VALUE] },
-    });
-  }
+  // NOT DONE HERE: the `Resolved` dropdown, and freezing the header row.
+  //
+  // Graph's workbook API refuses both against this workbook — `dataValidation`
+  // 400s even on a GET, and every spelling of `freezePanes` 400s too. They are
+  // one-off settings that live in the file once set, so they are done by hand per
+  // tab rather than left here as calls that fail on every run:
+  //
+  //   Data > Data Validation > Allow: List > Source: Done   (on the Resolved column)
+  //   View > Freeze Panes > Freeze Top Row
+  //
+  // Neither is load-bearing. `RESOLVED_VALUES` accepts the words staff type, so
+  // the marker works with or without a dropdown to click.
 
   return { operations, rows: bodyLast - bodyFirst + 1 };
 }

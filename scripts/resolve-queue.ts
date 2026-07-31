@@ -160,13 +160,18 @@ async function main(): Promise<void> {
     out(`wrote back ${writeBacks.length} fields to the daily sheets`);
 
     // --- 2. clear the status at source ---------------------------------------
+    // `/clear`, not a write of null. Graph accepts a values PATCH containing
+    // nulls, returns 200, and leaves the cells exactly as they were — so this
+    // step would have silently done nothing, the keyword would have stayed in
+    // column B, and the patient would have been re-appended on every cycle
+    // forever. See Workbook.clearRange.
     let cleared = 0;
     for (const intent of resolved) {
       if (!intent.sourceSheet || !intent.sourceRow) continue;
-      await workbook.writeRange(
+      await workbook.clearRange(
         intent.sourceSheet,
         cellAddress(LAYOUT.daily.statusColumn, intent.sourceRow),
-        [[null]],
+        'Contents',
       );
       cleared++;
     }

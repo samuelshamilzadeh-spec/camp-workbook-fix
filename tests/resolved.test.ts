@@ -253,9 +253,19 @@ describe('the styling pass', () => {
     expect(styled('United Refuah').operations[0]!.address).toBe('A1:Q1');
   });
 
-  it('freezes the header row so it survives a thousand-row scroll', () => {
-    const freeze = styled('Missing Info').operations.find((op) => op.kind === 'freeze');
-    expect(freeze?.freeze).toEqual({ rows: 1 });
+  it('plans no operation Graph will refuse', () => {
+    // The Resolved dropdown and the frozen header row belong here and are
+    // deliberately absent: Graph 400s on `dataValidation` (even on a GET) and on
+    // every spelling of `freezePanes` against this workbook. Both are manual
+    // one-offs rather than calls that fail on every run. See src/domain/style.ts.
+    const kinds = new Set(styled('Missing Info').operations.map((op) => op.kind));
+    expect([...kinds].sort()).toEqual([
+      'border',
+      'fill',
+      'font',
+      'format',
+      'number-format',
+    ]);
   });
 
   it('formats both date columns and centres the Source Row', () => {
@@ -267,11 +277,6 @@ describe('the styling pass', () => {
         (op) => op.what === 'centre Source Row' && op.format?.horizontalAlignment === 'Center',
       ),
     ).toBe(true);
-  });
-
-  it('offers the dropdown only where the column exists', () => {
-    expect(styled('Missing Info').operations.some((op) => op.kind === 'validation')).toBe(true);
-    expect(styled('United Refuah').operations.some((op) => op.kind === 'validation')).toBe(false);
   });
 
   it('does not draw vertical lines', () => {

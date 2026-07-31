@@ -286,6 +286,37 @@ export class Workbook {
     }
   }
 
+  /**
+   * Empties cells.
+   *
+   * This exists because **writing `null` does not clear a cell.** Graph accepts
+   * a values PATCH containing nulls, returns 200, and leaves every one of those
+   * cells exactly as it was. Verified against the live workbook: three cells
+   * holding SyncIDs, PATCHed with `[[null],[null],[null]]`, still held their
+   * SyncIDs afterwards; the `/clear` action emptied them.
+   *
+   * So anything that needs a cell to become empty must come through here. The
+   * one that mattered was clearing column B on a daily sheet after a row is
+   * marked resolved — with a null write that silently did nothing, leaving the
+   * keyword in place and the patient re-appended on the next cycle forever.
+   *
+   * `Contents` leaves formatting alone, which is what almost every caller wants:
+   * the red shading on a blank required field should survive the value being
+   * cleared.
+   */
+  async clearRange(
+    sheetName: string,
+    address: string,
+    applyTo: 'All' | 'Contents' | 'Formats' = 'Contents',
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/clear`,
+        { method: 'POST', body: { applyTo }, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
   async setFill(sheetName: string, address: string, color: string): Promise<void> {
     await this.withSession(() =>
       this.graph.request(
@@ -437,38 +468,6 @@ export class Workbook {
       this.graph.request(
         `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/borders/${edge}`,
         { method: 'PATCH', body: border, headers: this.sessionHeaders },
-      ),
-    );
-  }
-
-  /**
-   * A dropdown on a range, so the normal way to mark a row done is a click that
-   * cannot be mistyped.
-   */
-  async setListValidation(sheetName: string, address: string, values: string[]): Promise<void> {
-    await this.withSession(() =>
-      this.graph.request(
-        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/dataValidation`,
-        {
-          method: 'PATCH',
-          body: {
-            rule: { list: { inCellDropDown: true, source: values.join(',') } },
-            // Not `Stop`: a typed `done` is accepted by the reconciler and
-            // refusing the keystroke would be a lie about what the sheet does.
-            errorAlert: { showAlert: false, style: 'Information' },
-          },
-          headers: this.sessionHeaders,
-        },
-      ),
-    );
-  }
-
-  /** Keeps the header visible while staff scroll a thousand-row queue. */
-  async freezeRows(sheetName: string, count: number): Promise<void> {
-    await this.withSession(() =>
-      this.graph.request(
-        `${worksheetPath(this.workbookPath, sheetName)}/freezePanes/freezeRows`,
-        { method: 'POST', body: { count }, headers: this.sessionHeaders },
       ),
     );
   }

@@ -13,8 +13,11 @@
  *   2. Rewrite the header row from the configured column list.
  *   3. Convert `Date of Visit` and `Date of Birth` from text to Excel serials.
  *   4. Apply the styling: header bar, camp divider bands, total row, centred
- *      columns, date formats, column widths, frozen header.
- *   5. Add the `Resolved` dropdown.
+ *      columns, date formats, column widths.
+ *
+ * The `Resolved` dropdown and the frozen header row are NOT done here: Graph
+ * refuses both against this workbook. They are one-off manual settings — see
+ * src/domain/style.ts.
  *
  * Step 1 is the only irreversible-ish one and the only one that touches patient
  * data — everything after it is formatting. It is a whole-column insert, so
@@ -26,7 +29,6 @@ import {
   LAYOUT,
   QUEUE_SHEET_NAMES,
   QUEUE_SHEET_TABS,
-  RESOLVED_DROPDOWN_VALUE,
   STYLE,
   assertLayoutVerified,
   loadConfig,
@@ -134,10 +136,41 @@ async function main(): Promise<void> {
     }
 
     // --- 1. insert the Resolved column --------------------------------------
+    //
+    // A whole-column insert is the right operation and not an in-memory reshuffle
+    // of A..Q, because these tabs carry columns this schema knows nothing about
+    // — `Ineligible & Inactive` has `Updated Insurance Carrier`, `Updated
+    // Insurance ID #` and `Updated Medicaid #` out at R, S and T. Rewriting a
+    // fixed window would overwrite them; an insert carries them along.
+    //
+    // It also carries along the SyncID column, which is the catch: BA shifts to
+    // BB, and every link between a queue row and its patient's daily row is
+    // suddenly in a column nothing reads. So the IDs are read first and put back
+    // where they belong afterwards.
     if (apply && needsColumnInsert) {
+      const syncIdColumn = LAYOUT.queue.syncIdColumn;
+      const { startRow } = parseAddress(used.address);
+      const lastRow = startRow + used.values.length - 1;
+      const ids: unknown[][] = [];
+      for (let row = startRow; row <= lastRow; row++) {
+        ids.push([cellFromGrid(used.values, startRow, parseAddress(used.address).startColumn, row, syncIdColumn) ?? null]);
+      }
+
       await workbook.insertColumns(tab, offsetColumn(first, 2), 1);
       log.info('migrate.column_inserted', { sheet: tab, column: offsetColumn(first, 2) });
-      out(`\ninserted ${offsetColumn(first, 2)} — re-reading the sheet`);
+      out(`\ninserted ${offsetColumn(first, 2)}`);
+
+      const shifted = offsetColumn(syncIdColumn, 1);
+      await workbook.writeRange(
+        tab,
+        rangeAddress(syncIdColumn, startRow, syncIdColumn, lastRow),
+        ids,
+      );
+      // `/clear`, not a write of nulls: a values PATCH containing null returns
+      // 200 and changes nothing. See Workbook.clearRange.
+      await workbook.clearRange(tab, rangeAddress(shifted, startRow, shifted, lastRow), 'All');
+      out(`moved ${ids.filter((v) => v[0]).length} SyncIDs back from ${shifted} to ${syncIdColumn}`);
+
       used = await workbook.getUsedRange(tab);
       shape = detectQueueShape(used);
     }
@@ -197,7 +230,20 @@ async function main(): Promise<void> {
 
     let done = 0;
     for (const operation of style.operations) {
-      await applyStyle(workbook, tab, operation);
+      try {
+        await applyStyle(workbook, tab, operation);
+      } catch (error) {
+        // Graph error bodies are dropped by the logger on purpose — a failed
+        // range write echoes the payload back, and that payload is patient data.
+        // So a bare 400 says nothing about which of seventy-odd calls failed.
+        // The operation's own description is safe to print and is the only thing
+        // that makes this diagnosable.
+        out(
+          `\nFAILED on style op ${done + 1}/${style.operations.length}: ` +
+            `${operation.kind} ${operation.address} — ${operation.what}`,
+        );
+        throw error;
+      }
       done++;
       if (done % 25 === 0) out(`  ${done}/${style.operations.length} style ops done`);
     }
@@ -292,12 +338,6 @@ async function applyStyle(workbook: Workbook, tab: string, op: StyleOperation): 
           op.numberFormat.columns,
         );
       }
-      return;
-    case 'validation':
-      await workbook.setListValidation(tab, op.address, [RESOLVED_DROPDOWN_VALUE]);
-      return;
-    case 'freeze':
-      if (op.freeze) await workbook.freezeRows(tab, op.freeze.rows);
       return;
   }
 }
