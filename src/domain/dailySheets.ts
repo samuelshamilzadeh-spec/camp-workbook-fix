@@ -90,9 +90,18 @@ export function normalizeCamp(raw: unknown): string | undefined {
   return String(raw).replace(/\s+/g, ' ').trim();
 }
 
-/** Case-insensitive grouping key. The display name keeps whatever staff typed. */
+/**
+ * Case-insensitive grouping key. The display name keeps whatever staff typed.
+ *
+ * Whitespace is collapsed as well as lowercased, and it has to be: a camp name
+ * reaching this from a daily sheet has been through `normalizeCamp`, while one
+ * read off a queue divider has only been trimmed. A divider a staff member typed
+ * as `Bnos  Naale` with two spaces would key differently from its own patients,
+ * so the appender would decide the camp had no block and write a second one
+ * below the first.
+ */
 export function campKey(camp: string | undefined): string {
-  return (camp ?? '(no camp)').toLowerCase();
+  return (camp ?? '(no camp)').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export function isDailySheetName(name: string, layout: WorkbookLayout = LAYOUT): boolean {

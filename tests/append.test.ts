@@ -376,6 +376,13 @@ function applyPlan(sheet: QueueSheetName, before: RangeData, operations: QueueOp
     operation.values.forEach((values, rowOffset) => {
       const row = at(startRow + rowOffset);
       values.forEach((value, columnOffset) => {
+        // Graph LEAVES A CELL ALONE when a values PATCH carries null — it
+        // returns 200 and changes nothing; only /clear empties a cell. Modelling
+        // null as a clear would make this simulator kinder than the workbook,
+        // and it is here precisely to be unkind: a plan that writes its rows to
+        // the wrong address produces a row mixing two patients on the real
+        // sheet, not a tidy half-blank one.
+        if (value === null) return;
         row[firstColumn + columnOffset] = value;
       });
     });
@@ -548,5 +555,86 @@ describe('planCountRefresh', () => {
       ]),
     );
     expect(planCountRefresh(sheet)).toEqual([]);
+  });
+});
+
+describe('a TOTAL line that is not at the bottom', () => {
+  /**
+   * A staff member can leave a camp block below the TOTAL, and the whole
+   * bottom-up argument depends on new camp blocks landing at or below every
+   * existing one. Deriving the append point from the TOTAL row alone put a new
+   * block ABOVE a grown one, and its insert then shifted the grown block down
+   * while the planner still held the old addresses for it.
+   */
+  const awkward = () =>
+    parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'header' },
+        { kind: 'divider', camp: 'Achim', count: 2 },
+        { kind: 'row', last: 'Existing-A1', syncId: 'S000000000901' },
+        { kind: 'row', last: 'Existing-A2', syncId: 'S000000000902' },
+        { kind: 'total', count: 3 },
+        { kind: 'divider', camp: 'Bnos', count: 1 },
+        { kind: 'row', last: 'Existing-B1', syncId: 'S000000000903' },
+      ]),
+    );
+
+  it('puts a new camp below every existing block, not above one', () => {
+    const plan = planQueueAppend({
+      sheet: awkward(),
+      appends: [intent('Missing Info', 'Bnos'), intent('Missing Info', 'Zed')],
+    });
+
+    const rows = inserts(plan.operations).map((op) => op.row);
+    // Still strictly descending: the invariant the ordering rests on.
+    expect(rows).toEqual([...rows].sort((a, b) => b - a));
+  });
+
+  it('survives being applied, with every existing row keeping its own SyncID', () => {
+    const before = queueRange('Missing Info', [
+      { kind: 'header' },
+      { kind: 'divider', camp: 'Achim', count: 2 },
+      { kind: 'row', last: 'Existing-A1', syncId: 'S000000000901' },
+      { kind: 'row', last: 'Existing-A2', syncId: 'S000000000902' },
+      { kind: 'total', count: 3 },
+      { kind: 'divider', camp: 'Bnos', count: 1 },
+      { kind: 'row', last: 'Existing-B1', syncId: 'S000000000903' },
+    ]);
+    const appends = [intent('Missing Info', 'Bnos'), intent('Missing Info', 'Zed')];
+    const plan = planQueueAppend({ sheet: parseQueueSheet('Missing Info', before), appends });
+    const after = parseQueueSheet('Missing Info', applyPlan('Missing Info', before, plan.operations));
+
+    expect(after.rows).toHaveLength(5);
+    for (const row of after.rows) {
+      const last = String(row.values['Last Name'] ?? '');
+      if (last.startsWith('Existing-')) {
+        expect(row.syncId).toBe(
+          { 'Existing-A1': 'S000000000901', 'Existing-A2': 'S000000000902', 'Existing-B1': 'S000000000903' }[last],
+        );
+      }
+    }
+    expect(after.groups.map((g) => g.camp).sort()).toEqual(['Achim', 'Bnos', 'Zed']);
+  });
+});
+
+describe('camp names spelled with stray whitespace', () => {
+  it('grows the existing block rather than writing a second one', () => {
+    // A divider typed with a doubled space still keys to the same camp as its
+    // own patients, whose camp cell went through normalizeCamp.
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'header' },
+        { kind: 'divider', camp: 'Bnos  Naale', count: 1 },
+        { kind: 'row', syncId: 'S000000000901' },
+      ]),
+    );
+    const plan = planQueueAppend({
+      sheet,
+      appends: [intent('Missing Info', 'Bnos Naale')],
+    });
+    expect(plan.placements).toHaveLength(1);
+    expect(plan.placements[0]).toMatchObject({ isNew: false, camp: 'Bnos  Naale', added: 1 });
   });
 });

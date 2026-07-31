@@ -181,12 +181,28 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
     byCamp.set(key, list);
   }
 
-  // The body ends where the TOTAL line begins, or at the last used row when
-  // there is no TOTAL yet. An empty tab's usedRange can stop above the first
-  // data row — a header row and nothing else — so the header sets the floor.
+  // Where a brand new camp block goes.
+  //
+  // This has to sit at or below every EXISTING camp block, because new blocks
+  // are emitted first (they end up bottom-most) and the whole bottom-up
+  // ordering argument depends on nothing above them being emitted later. Taking
+  // it from the TOTAL row alone was not enough: a tab whose TOTAL sits above a
+  // camp block — which a staff member can produce by adding a block underneath
+  // it — put the new block ABOVE a grown one, and its insert then shifted that
+  // grown block down while the planner still held the old addresses for it.
+  //
+  // So it is measured from the content: below every patient row and every camp
+  // header, and above the TOTAL when the TOTAL is where it belongs.
   const floor = Math.max(sheet.lastRow, sheet.firstDataRow - 1);
-  const bodyEnd = sheet.totalRow ? sheet.totalRow - 1 : floor;
-  const appendPoint = bodyEnd + 1;
+  const contentEnd = Math.max(
+    sheet.firstDataRow - 1,
+    ...sheet.rows.map((row) => row.row),
+    ...sheet.groups.map((group) => group.headerRow),
+  );
+  const appendPoint =
+    sheet.totalRow !== undefined && sheet.totalRow > contentEnd
+      ? sheet.totalRow
+      : contentEnd + 1;
 
   const blocks: Block[] = [];
   for (const [key, intents] of byCamp) {
