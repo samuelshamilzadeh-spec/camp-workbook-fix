@@ -109,12 +109,23 @@ that setting — it only accepts a URL — so the host mounts no content and fin
 nothing to run. Every other diagnostic looks healthy: the zip is correct, the
 app settings are correct, the deployment succeeded.
 
-Use Core Tools, which handles this correctly and is present in Cloud Shell:
+Use Core Tools, which handles this correctly and is present in Cloud Shell.
+
+**`local.settings.json` must exist first.** It is gitignored — it normally holds
+a client secret — and `func` reads `FUNCTIONS_WORKER_RUNTIME` out of it to work
+out what language the project is. Without it you get
+`Can't determine project language from files` and
+`Worker runtime cannot be 'None'`, neither of which mentions the missing file.
+It is only used to identify the project; the real settings live in Azure.
 
 ```bash
+cp local.settings.json.example local.settings.json
 npm ci && npm run build
-func azure functionapp publish "$APP"
+func azure functionapp publish "$APP" --javascript
 ```
+
+`--javascript` because `dist/` is already built; without it Core Tools tries to
+work the language out for itself again.
 
 If `func` is unavailable, do what it does — put the package in blob storage and
 point the setting at it:

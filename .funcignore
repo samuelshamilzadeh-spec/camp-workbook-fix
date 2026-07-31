@@ -3,6 +3,8 @@
 .github/
 .vscode/
 docs/
+infra/
+src/
 local.settings.json
 node_modules/@types/
 scripts/
