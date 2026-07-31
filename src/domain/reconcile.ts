@@ -169,7 +169,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     if (row.outcome.kind !== 'queued') continue;
     const syncId = input.newSyncId();
     intents.push({ kind: 'stamp-id', sheet: row.sheet, row: row.row, syncId });
-    intents.push(buildAppend(row, syncId, row.outcome.destination, layout));
+    intents.push(buildAppend(row, syncId, row.outcome.destination));
   }
 
   // --- 2. Already-stamped source rows ---------------------------------------
@@ -181,7 +181,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
         // Stamped but absent from its queue: append. Covers a row whose keyword
         // changed to a different destination as well, because the stale row is
         // removed by the pass below.
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination, layout));
+        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination));
         continue;
       }
 
@@ -197,7 +197,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
           sourceRow: undefined,
           reason: 'no-longer-queued-at-source',
         });
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination, layout));
+        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination));
         continue;
       }
 
@@ -301,11 +301,19 @@ function buildAppend(
   row: DailyRow,
   syncId: string,
   destination: QueueSheetName,
-  layout: WorkbookLayout,
 ): AppendQueueRowIntent {
   const values: Partial<Record<QueueColumn, unknown>> = { ...row.fields };
+  // `Date of Visit` is written as the daily sheet's own name (`July 30, 2026`)
+  // rather than as an Excel serial. Both are accepted by `resolveSourceSheet`,
+  // and the name needs no locale-dependent date parsing on the way in and tells
+  // a human which tab to open on the way out.
   values['Date of Visit'] = row.sheet;
-  values['Source Row'] = `${row.sheet}!${layout.daily.statusColumn}${row.row}`;
+  // A plain row number, per the office's decision that Source Row carries no
+  // hyperlink. It was briefly written as `July 30, 2026!B45`, which reads well
+  // but is not a number: `planAdoption` parses this cell with `Number()`, so the
+  // combined form would have made every row this project appends unadoptable and
+  // left the column holding two different things.
+  values['Source Row'] = row.row;
 
   const blankRequired = REQUIRED_FIELDS[destination].filter((field) =>
     isBlank(values[field]),

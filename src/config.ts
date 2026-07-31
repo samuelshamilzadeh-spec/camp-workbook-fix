@@ -54,9 +54,9 @@ export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
   'Missing Info': 'Missing Info (New)',
   'Not Accepted': 'Not Accepted',
   'Ineligible & Inactive': 'Ineligible & Inactive',
-  // NOTE: the live `United Refuah` tab was renamed to `United Refuah (old)` and
-  // hidden, so this currently resolves to nothing and its 85 rows have no home.
-  // Kept pointing at the canonical name so creating that tab is all it takes.
+  // The original tab was renamed `United Refuah (old)` and hidden; a fresh one
+  // was created under the canonical name on 2026-07-30 and is empty. It is the
+  // first target for Phase 2b: 85 rows, append-only, no inserts needed.
   'United Refuah': 'United Refuah',
 };
 

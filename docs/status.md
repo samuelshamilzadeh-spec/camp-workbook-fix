@@ -1,6 +1,6 @@
 # Where this project stands
 
-Last updated 2026-07-30.
+Last updated 2026-07-31.
 
 ## Done and verified against the live workbook
 
@@ -29,11 +29,18 @@ finds nothing to do. One row remains unlinked pending a date of birth.
 The standalone `phase0-backfill.ts` still needs updating for the two-identifier
 model (`SyncID` per visit, `PatientID` per person) before it is used.
 
-### Phase 2 — populating the queue sheets
-The reconciler decides *what* to write. Nothing *does* the writing. Still
-needed: appending rows in camp order, the `Camp - N patients` dividers and
-`TOTAL` row, dark red shading on blank required fields, and whole-row inserts so
-columns never fall out of alignment.
+### Phase 2b — appending the missing rows — BUILT, NOT RUN
+`src/domain/append.ts` plans the appends and `npm run append -- "<queue>"`
+applies them: camp order, `Camp - N patients` dividers, a `TOTAL` line, dark red
+shading on blank required fields, and whole-row inserts. Dry run by default, one
+queue per run, and it refuses to open gaps in a live sheet without
+`--allow-inserts`.
+
+**Nothing has been written to the live workbook.** 219 tests pass, including one
+that applies a plan to a simulated sheet and checks every existing row keeps its
+own SyncID. What remains is a dry run against the real file, then
+`United Refuah` — empty, 85 rows, append-only, no inserts, no shading. See
+[`docs/phase2b.md`](phase2b.md).
 
 ### Phase 3 — write-back to the daily sheets
 Intents are computed; no applier. The patient fan-out logic
@@ -78,6 +85,7 @@ the Function App and OIDC credentials exist.
 
 ## Reference
 
+- `docs/phase2b.md` — how the appender works and how to run it
 - `docs/inspection-2026-07-30.md` — what the live workbook actually contains
 - `docs/column-b-values-2026-07-30.md` — all 111 status values and their routing
 - `docs/phase2-decisions.md` — the rules Phase 2 must follow

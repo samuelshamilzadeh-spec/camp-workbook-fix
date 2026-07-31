@@ -125,7 +125,9 @@ describe('reconcile', () => {
     expect(append.destination).toBe('Missing Info');
     expect(append.camp).toBe('Camp Ramah');
     expect(append.values['Date of Visit']).toBe('2026-07-30');
-    expect(append.values['Source Row']).toBe('2026-07-30!B2');
+    // A plain row number: `planAdoption` reads this cell with `Number()`, and
+    // the existing queue tabs hold a number here too.
+    expect(append.values['Source Row']).toBe(2);
     // Phone is blank and required for Missing Info, so it gets red shading.
     expect(append.blankRequired).toContain('Phone Number');
     expect(append.blankRequired).not.toContain('Last Name');

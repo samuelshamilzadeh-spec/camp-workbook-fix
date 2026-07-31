@@ -235,17 +235,71 @@ export class Workbook {
     );
   }
 
+  /**
+   * Inserts `count` blank WHOLE rows at `firstRow`, shifting everything below
+   * down.
+   *
+   * The office's hard constraint is that one row is one patient and nothing may
+   * break that alignment. A range insert scoped to the data columns would shift
+   * A:Q down and leave BA — the SyncID column — where it was, silently pairing
+   * every row below with the previous patient's identifier. So the insert is
+   * always applied to the entire row.
+   *
+   * Two address forms reach the same operation, and which one Graph accepts is
+   * not something this codebase can settle from the documentation:
+   *
+   *   `range(address='A10:A12')/entireRow/insert`   — a range, widened
+   *   `range(address='10:12')/insert`               — Excel's whole-row notation
+   *
+   * The first is tried and the second is the fallback, because a 400 here means
+   * Graph rejected the URL before doing anything — nothing is inserted, nothing
+   * is half-done, and retrying with the other spelling is safe. `GraphClient`
+   * does not retry a 400, so this cannot loop.
+   */
+  async insertRows(sheetName: string, firstRow: number, count: number): Promise<void> {
+    if (count <= 0) return;
+    if (!Number.isInteger(firstRow) || firstRow < 1) {
+      throw new Error(`Not a row number: ${firstRow}`);
+    }
+    const lastRow = firstRow + count - 1;
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const insert = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Down' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`A${firstRow}:A${lastRow}`)}')/entireRow/insert`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstRow}:${lastRow}`)}')/insert`,
+      );
+    }
+  }
+
   async setFill(sheetName: string, address: string, color: string): Promise<void> {
-    await this.graph.request(
-      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
-      { method: 'PATCH', body: { color }, headers: this.sessionHeaders },
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
+        { method: 'PATCH', body: { color }, headers: this.sessionHeaders },
+      ),
     );
   }
 
   async clearFill(sheetName: string, address: string): Promise<void> {
-    await this.graph.request(
-      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
-      { method: 'POST', body: {}, headers: this.sessionHeaders },
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
+        { method: 'POST', body: {}, headers: this.sessionHeaders },
+      ),
     );
   }
 

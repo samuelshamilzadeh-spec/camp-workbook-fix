@@ -16,7 +16,8 @@ the single chokepoint every write passes through
 |---|---|---|
 | 0 | Add the `SyncID` column, stamp only rows currently carrying a queued keyword | Built — `npm run backfill`, dry run by default |
 | 1 | Read-only. Authenticate, read, log what it *would* change. Zero writes | Built — this is what the timer runs today |
-| 2 | Populate the queue sheets | Not started |
+| 2a | Give the existing queue rows the same `SyncID` as their source row | Done — 679 of 681 written to the live workbook |
+| 2b | Append the patients who have no queue row yet | Built — `npm run append`, dry run by default, **not yet run live** |
 | 3 | Write-back of staff edits to the daily sheets | Not started |
 | 4 | Clearing and row removal | Not started |
 | 5 | Notes sheet | Not started |
@@ -58,7 +59,13 @@ checking.
 npm run inspect                 # answers the "before you write code" questions
 npm run reconcile               # one Phase 1 cycle, prints the plan
 npm run reconcile -- --force    # ignore the checkpoint and do the work anyway
+npm run adopt                   # Phase 2a: link existing queue rows (dry run)
+npm run append -- "United Refuah"   # Phase 2b: append missing rows (dry run)
 ```
+
+Every write script is dry run by default and takes `--apply`. See
+[`docs/phase2b.md`](docs/phase2b.md) for the Phase 2b run order and the reasons
+for it.
 
 ### Open questions this codebase could not resolve on its own
 
@@ -338,8 +345,10 @@ src/
     syncId.ts           row identity
     cells.ts            A1 address arithmetic
     dailySheets.ts      daily sheet parsing, camp normalizing, bounded scan
-    queueSheets.ts      queue sheet parsing and camp groups
+    queueSheets.ts      queue sheet parsing, shape detection, camp groups
     reconcile.ts        state-based reconciliation -> intents
+    adopt.ts            linking the pre-SyncID queue rows to their source rows
+    append.ts           Phase 2b: appends -> ordered workbook operations
   graph/
     auth.ts             app-only credential, cached token
     client.ts           retries: 423/409 locks, 429 throttling, jittered backoff
@@ -353,5 +362,8 @@ scripts/
   inspect-workbook.ts   answers the pre-build questions, read-only
   phase0-backfill.ts    ID stamping, dry run by default
   run-reconcile.ts      one Phase 1 cycle from the CLI
+  adopt-apply.ts        Phase 2a, dry run by default
+  append-queue.ts       Phase 2b, one queue per run, dry run by default
+  create-queue-sheet.ts adds a missing queue tab and its header row
   concurrency-test.ts   the pre-Phase-2 write experiment
 ```
