@@ -1,8 +1,8 @@
 import { LAYOUT, type QueueSheetName, type RuntimeConfig, type WorkbookLayout } from '../config';
-import { planQueueAppend } from '../domain/append';
+import { planCountRefresh, planQueueAppend } from '../domain/append';
 import { planColumnWrites } from '../domain/stamp';
 import type { ParsedDailySheet } from '../domain/dailySheets';
-import type { ParsedQueueSheet } from '../domain/queueSheets';
+import { parseQueueSheet, type ParsedQueueSheet } from '../domain/queueSheets';
 import type {
   AppendQueueRowIntent,
   ReconcilePlan,
@@ -59,6 +59,8 @@ export interface ApplyPlanResult {
   wroteBack: number;
   removed: number;
   skipped: number;
+  /** Divider and TOTAL lines rewritten because the tab's row count changed. */
+  recounted: number;
   /** True when anything at all was written. Drives the loop guard. */
   wrote: boolean;
 }
@@ -72,8 +74,13 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
     wroteBack: 0,
     removed: 0,
     skipped: 0,
+    recounted: 0,
     wrote: false,
   };
+
+  // Tabs whose row layout this cycle changed, so the divider and TOTAL counts
+  // on them can be brought back into line at the end.
+  const touchedTabs = new Set<string>();
 
   const stamps = plan.intents.filter((i): i is StampIdIntent => i.kind === 'stamp-id');
   const appends = plan.intents.filter(
@@ -110,18 +117,37 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
   //
   // Per destination, because the planner positions rows against one sheet's
   // camp blocks and its addresses are only valid for that sheet.
-  for (const queue of input.queues) {
-    const forQueue = appends.filter((intent) => intent.destination === queue.sheet);
-    if (forQueue.length === 0) continue;
+  //
+  // Iterating the DESTINATIONS that have appends, not the queues that happened
+  // to parse. Iterating the parsed queues silently dropped every append bound
+  // for a tab that could not be resolved — and a tab can stop resolving simply
+  // by being renamed, which this office has already done once. Those appends
+  // vanished without being counted as skipped, which let the removal guard
+  // below conclude the replacement row existed.
+  const appendedOk = new Set<string>();
+  const queueBySheet = new Map(input.queues.map((queue) => [queue.sheet, queue]));
+  const destinations = new Set(appends.map((intent) => intent.destination));
 
-    const tab = tabFor.get(queue.sheet);
-    if (!tab) continue;
+  for (const destination of destinations) {
+    const forQueue = appends.filter((intent) => intent.destination === destination);
+    const queue = queueBySheet.get(destination);
+    const tab = tabFor.get(destination);
+
+    if (!queue || !tab) {
+      log.warn('apply.destination_unavailable', {
+        queueSheet: destination,
+        count: forQueue.length,
+        reason: 'no tab in the workbook resolves to this queue; its rows have nowhere to go',
+      });
+      result.skipped += forQueue.length;
+      continue;
+    }
 
     if (!queue.shapeDetected) {
       // The first data row is a guess. Refusing beats writing eight rows into
       // an instruction block.
       log.warn('apply.shape_not_detected', {
-        queueSheet: queue.sheet,
+        queueSheet: destination,
         count: forQueue.length,
         reason: 'header row could not be read off the sheet; appends skipped',
       });
@@ -145,6 +171,8 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
       result.wrote = true;
     }
     result.appended += queuePlan.appended;
+    for (const intent of forQueue) appendedOk.add(intent.syncId);
+    touchedTabs.add(tab);
   }
 
   if (config.phase < 3) return result;
@@ -182,13 +210,27 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
   // A `wrong-queue` row whose replacement has not been appended yet is left
   // alone: deleting both sides of a move puts the patient on no queue. Since
   // appends ran above, that only happens when the append was skipped.
-  const appendedIds = new Set(appends.map((intent) => intent.syncId));
+  // A `wrong-queue` row is only safe to delete once THAT PATIENT'S replacement
+  // exists. Asked per SyncID, not by a global counter: one destination failing
+  // must not authorise deleting rows whose replacements did land, and — far
+  // worse — must not be invisible to rows whose replacements did not.
+  const appendPlanned = new Set(appends.map((intent) => intent.syncId));
   const safeToRemove = removals.filter((intent) => {
     if (intent.reason === 'cleared-on-queue') return false; // reported, never applied
-    if (intent.reason === 'wrong-queue' && appendedIds.has(intent.syncId ?? '')) {
-      return result.skipped === 0; // the append ran, so the replacement exists
-    }
-    return true;
+    if (intent.reason !== 'wrong-queue') return true;
+
+    const syncId = intent.syncId ?? '';
+    // No append planned means they already have a row on the right queue.
+    if (!appendPlanned.has(syncId)) return true;
+    if (appendedOk.has(syncId)) return true;
+
+    log.warn('apply.removal_deferred', {
+      queueSheet: intent.queueSheet,
+      row: intent.queueRow,
+      syncId,
+      reason: 'the replacement row was not written, so this is the only row this patient has',
+    });
+    return false;
   });
 
   const removalResult = await applyRemovals({
@@ -206,6 +248,34 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
   result.wroteBack += removalResult.wrote;
   result.skipped += removalResult.skipped;
   if (removalResult.deleted > 0 || removalResult.wrote > 0) result.wrote = true;
+
+  for (const intent of safeToRemove) {
+    const tab = tabFor.get(intent.queueSheet);
+    if (tab) touchedTabs.add(tab);
+  }
+
+  // --- 5. Bring the counts back into line ----------------------------------
+  //
+  // `Achim - 6 patients` is a snapshot taken when the row was written, which is
+  // what the office asked for. It goes stale the moment a row is added or
+  // removed, and nothing in a cycle was putting it right — only the migrate
+  // script did, by hand. So the first time the timer removed a resolved row,
+  // every divider above it started lying and stayed that way.
+  //
+  // Re-read rather than reason: the tab has just had rows inserted and deleted,
+  // and the row numbers this cycle started with are exactly the ones that are no
+  // longer true.
+  for (const tab of touchedTabs) {
+    const queue = [...queueBySheet.values()].find((q) => tabFor.get(q.sheet) === tab);
+    if (!queue) continue;
+
+    const fresh = parseQueueSheet(queue.sheet, await workbook.getUsedRange(tab), layout);
+    for (const operation of planCountRefresh(fresh, layout)) {
+      await workbook.writeRange(tab, operation.address, operation.values);
+      result.wrote = true;
+      result.recounted++;
+    }
+  }
 
   return result;
 }
