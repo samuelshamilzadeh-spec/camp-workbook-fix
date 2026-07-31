@@ -3,13 +3,12 @@ import {
   LAYOUT,
   QUEUE_ONLY_COLUMNS,
   REQUIRED_FIELDS,
-  STYLE,
   type QueueColumn,
   type QueueSheetName,
   type WorkbookLayout,
 } from '../config';
 import { isBlank } from './cells';
-import { sameDay } from './dates';
+import { sameMeaning } from './compare';
 import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
@@ -436,26 +435,12 @@ export function sameValue(a: unknown, b: unknown): boolean {
 /**
  * Compares one field's value on the queue sheet against the daily sheet.
  *
- * Date columns need their own comparison, because the two sides now store a date
- * differently on purpose: the queue sheets hold an Excel serial so the column
- * can be sorted and filtered, and the daily sheets hold whatever text staff
- * typed. `40147` and `11/30/2009` are the same birthday and different strings.
- *
- * Compared as strings, every dated row would look like a staff edit on every
- * cycle — a write-back storm at a five-second cadence, and one that would
- * overwrite the daily sheets' text with serials.
- *
- * The date-aware path is deliberately limited to the columns that hold dates.
- * Applied to everything it would start reading zip codes and phone numbers as
- * serial numbers, and two different values would compare equal.
+ * Delegates to `sameMeaning`, which compares what a value denotes rather than
+ * how it is spelled — see src/domain/compare.ts for why a string comparison here
+ * called 1,179 cells staff edits when none of them were.
  */
 export function sameFieldValue(field: QueueColumn, a: unknown, b: unknown): boolean {
-  if (STYLE.dateColumns.includes(field)) {
-    if (isBlank(a) && isBlank(b)) return true;
-    if (isBlank(a) || isBlank(b)) return false;
-    return sameDay(a, b) || sameValue(a, b);
-  }
-  return sameValue(a, b);
+  return sameMeaning(field, a, b);
 }
 
 function countIntents(intents: Intent[]): Record<string, number> {
