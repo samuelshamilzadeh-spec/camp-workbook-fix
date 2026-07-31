@@ -142,14 +142,18 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
     serverFarmId: plan.id
     httpsOnly: true
     siteConfig: {
-      linuxFxVersion: 'Node|20'
+      // Node 20 reached end of life on 2026-04-30. The Azure CLI warns about it
+      // on every command and an unsupported runtime stops getting security
+      // patches, which matters more than usual for a process holding a
+      // tenant-wide Graph credential. 22 is LTS into 2027.
+      linuxFxVersion: 'Node|22'
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
       http20Enabled: true
       appSettings: [
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'node' }
-        { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~20' }
+        { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~22' }
         {
           name: 'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${storage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storage.listKeys().keys[0].value}'

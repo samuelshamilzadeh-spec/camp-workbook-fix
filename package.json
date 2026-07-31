@@ -6,7 +6,7 @@
   "main": "dist/src/functions/*.js",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": ">=20 <25"
   },
   "scripts": {
     "build": "tsc",
