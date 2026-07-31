@@ -47,14 +47,12 @@
  */
 
 import {
-  LAYOUT,
   QUEUE_SHEET_NAMES,
   QUEUE_SHEET_TABS,
   assertLayoutVerified,
   loadConfig,
   type QueueSheetName,
 } from '../src/config';
-import { cellAddress } from '../src/domain/cells';
 import { mapWithConcurrency } from '../src/domain/concurrency';
 import { isDailySheetName, parseDailySheet } from '../src/domain/dailySheets';
 import { normalizeSheetName, parseQueueSheet, resolveSheetName } from '../src/domain/queueSheets';
@@ -66,6 +64,7 @@ import {
 import { newSyncId } from '../src/domain/syncId';
 import { consoleSink, createLogger, describeError } from '../src/logging';
 import { createSyncContext } from '../src/sync/context';
+import { applyRemovals } from '../src/sync/removals';
 
 const out = (line = '') => process.stdout.write(`${line}\n`);
 
@@ -216,64 +215,19 @@ async function main(): Promise<void> {
       counts: { resolved: resolved.length, finished: finished.length, moved: movedAlready.length },
     });
 
-    // --- 1. the fixes go home ------------------------------------------------
-    //
-    // Before anything is cleared or deleted. The queue row is the only copy.
-    for (const intent of writeBacks) {
-      const column = LAYOUT.daily.fieldColumns[intent.field];
-      if (!column) continue;
-      await workbook.writeRange(
-        intent.sourceSheet,
-        cellAddress(column, intent.sourceRow),
-        [[intent.value ?? null]],
-      );
-    }
-    out(`wrote back ${writeBacks.length} fields to the daily sheets`);
+    const { wrote, deleted, cleared, skipped } = await applyRemovals({
+      workbook,
+      removals: actionable,
+      writeBacks,
+      tabFor,
+      log,
+    });
 
-    // --- 2. clear the status at source ---------------------------------------
-    // `/clear`, not a write of null. Graph accepts a values PATCH containing
-    // nulls, returns 200, and leaves the cells exactly as they were — so this
-    // step would have silently done nothing, the keyword would have stayed in
-    // column B, and the patient would have been re-appended on every cycle
-    // forever. See Workbook.clearRange.
-    let cleared = 0;
-    for (const intent of resolved) {
-      if (!intent.sourceSheet || !intent.sourceRow) continue;
-      await workbook.clearRange(
-        intent.sourceSheet,
-        cellAddress(LAYOUT.daily.statusColumn, intent.sourceRow),
-        'Contents',
-      );
-      cleared++;
+    out(`wrote back ${wrote} fields, deleted ${deleted} rows, cleared ${cleared} statuses`);
+    if (skipped > 0) {
+      out(`SKIPPED ${skipped} rows whose SyncID no longer matched — the sheet moved under the plan.`);
+      out('Re-run to pick them up against fresh row numbers.');
     }
-    out(`cleared column B on ${cleared} source rows`);
-
-    // --- 3. delete the queue rows -------------------------------------------
-    //
-    // Bottom-up within each tab. Deleting row 40 moves row 41 up to 40, so a
-    // top-down pass would delete the wrong patient from the second row onwards.
-    //
-    // Both kinds are merged into ONE pass before sorting. Deleting the marked
-    // rows first and the stale rows afterwards would leave the second set
-    // holding row numbers from before the first set moved everything up — the
-    // same failure, arrived at by being tidy.
-    const byTab = new Map<string, number[]>();
-    for (const intent of actionable) {
-      const tab = tabFor.get(intent.queueSheet);
-      if (!tab) continue;
-      const rows = byTab.get(tab) ?? [];
-      rows.push(intent.queueRow);
-      byTab.set(tab, rows);
-    }
-
-    let deleted = 0;
-    for (const [tab, rows] of byTab) {
-      for (const row of [...new Set(rows)].sort((a, b) => b - a)) {
-        await workbook.deleteRows(tab, row, 1);
-        deleted++;
-      }
-    }
-    out(`deleted ${deleted} queue rows`);
 
     log.info('resolve.complete', {
       count: actionable.length,
@@ -281,9 +235,10 @@ async function main(): Promise<void> {
         resolved: resolved.length,
         finished: finished.length,
         moved: movedAlready.length,
-        writeBacks: writeBacks.length,
+        writeBacks: wrote,
         cleared,
         deleted,
+        skipped,
       },
     });
 

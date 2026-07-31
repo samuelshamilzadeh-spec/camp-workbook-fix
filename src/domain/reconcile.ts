@@ -370,14 +370,15 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       for (const row of queueRows) {
         if (row.sheet === destination) continue;
 
-        // A row on the wrong queue can still carry real work. Somebody may have
-        // typed the missing phone number into it and marked it Done before the
-        // status changed underneath them, and the queue row is the only place
-        // that number exists. Carrying it back BEFORE the row is removed is the
-        // difference between finishing their work and deleting it.
-        if (row.resolved.kind === 'resolved') {
-          pushWriteBacks(row, dailyRow, syncId);
-        } else if (row.resolved.kind === 'unrecognized') {
+        // A row on the wrong queue can still carry real work — somebody may have
+        // typed the missing phone number into it, marked or unmarked. The
+        // replacement row on the correct tab is built from the DAILY sheet, so
+        // anything typed only here is lost the moment this row goes. Carrying it
+        // home first is the difference between finishing their work and deleting
+        // it, and it costs nothing when there is nothing to carry.
+        pushWriteBacks(row, dailyRow, syncId);
+
+        if (row.resolved.kind === 'unrecognized') {
           unrecognizedResolved.push({
             queueSheet: row.sheet,
             queueRow: row.row,
@@ -472,9 +473,18 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     }
 
     // Terminal (ohi / lasante) or the keyword was removed at the source: the row
-    // belongs on no queue at all, so every copy of it goes. Nothing is written
-    // back and nothing is cleared — the daily sheet is already the truth.
-    for (const row of queueRows) removeStale(row, 'no-longer-queued-at-source');
+    // belongs on no queue at all, so every copy of it goes.
+    //
+    // "The daily sheet is already the truth" is not something to assume. A staff
+    // member can type a phone number onto a queue row on Monday without marking
+    // it, and somebody can write `lasante` at the source on Tuesday. Nothing has
+    // carried that number anywhere, and deleting the row is the last chance to.
+    // So the same rule applies here as everywhere: never remove a row without
+    // first taking what is on it.
+    for (const row of queueRows) {
+      pushWriteBacks(row, dailyRow, syncId);
+      removeStale(row, 'no-longer-queued-at-source');
+    }
   }
 
   // --- 3. Queue rows with no live source ------------------------------------
