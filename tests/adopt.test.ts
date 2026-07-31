@@ -191,14 +191,17 @@ describe('planAdoption', () => {
     expect(result.problems[0]).toMatchObject({ reason: 'source-already-adopted', queueRow: 4 });
   });
 
-  it('reports a pointer to a row that no longer exists', () => {
-    const daily = [dailyRow(SHEET, 12, 'Cohen', 'Dovid', '2014-01-01')];
+  it('reports a pointer to a row that no longer exists AND no matching patient', () => {
+    // A bad pointer alone is now recoverable by identity, so this only fails
+    // when the patient is genuinely not on that sheet either.
+    const daily = [dailyRow(SHEET, 12, 'Someone', 'Else', '2000-01-01')];
     const result = planAdoption({
       queueRows: [queueRow(3, 46225, 999, 'Cohen', 'Dovid', '2014-01-01')],
       daily: sheets,
       dailyRowsBySheet: index(daily),
       newSyncId: mint,
     });
+    expect(result.matches).toHaveLength(0);
     expect(result.problems[0]).toMatchObject({ reason: 'source-row-out-of-range', sourceRow: 999 });
   });
 
@@ -276,5 +279,107 @@ describe('date-aware identity comparison', () => {
     });
     expect(result.problems).toHaveLength(0);
     expect(result.matches).toHaveLength(1);
+  });
+});
+
+describe('recovering a drifted pointer by identity', () => {
+  // Observed live: someone inserted one row on July 9 and deleted one on
+  // July 14 during a ninety-minute window, and 43 queue pointers drifted by
+  // exactly +1 and -1. The pointer is a hint; identity is the truth.
+  it('finds the patient when the pointer landed on someone else', () => {
+    const daily = new Map([
+      [SHEET, new Map([
+        [12, dailyRow(SHEET, 12, 'Weinberger', 'Binyomin', '2013-08-14')],
+        [13, dailyRow(SHEET, 13, 'Halperin', 'Menachem', '2015-03-01')],
+      ])],
+    ]);
+    const result = planAdoption({
+      // Pointer says row 12, but that is now Weinberger. Halperin moved to 13.
+      queueRows: [queueRow(3, 46225, 12, 'Halperin', 'Menachem', '2015-03-01')],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+
+    expect(result.problems).toHaveLength(0);
+    expect(result.matches[0]).toMatchObject({ sourceRow: 13, via: 'identity', drift: 1 });
+  });
+
+  it('recovers a pointer past the end of the sheet', () => {
+    const daily = new Map([
+      [SHEET, new Map([[7, dailyRow(SHEET, 7, 'Cohen', 'Dovid', '2014-01-01')]])],
+    ]);
+    const result = planAdoption({
+      queueRows: [queueRow(3, 46225, 999, 'Cohen', 'Dovid', '2014-01-01')],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.matches[0]).toMatchObject({ sourceRow: 7, via: 'identity' });
+  });
+
+  it('marks an undrifted match as found by pointer', () => {
+    const daily = new Map([
+      [SHEET, new Map([[12, dailyRow(SHEET, 12, 'Cohen', 'Dovid', '2014-01-01')]])],
+    ]);
+    const result = planAdoption({
+      queueRows: [queueRow(3, 46225, 12, 'Cohen', 'Dovid', '2014-01-01')],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.matches[0]).toMatchObject({ via: 'pointer' });
+    expect(result.matches[0]!.drift).toBeUndefined();
+  });
+
+  it('REFUSES when the same patient appears twice on the day', () => {
+    // Two candidate rows and no way to tell which visit the queue row came
+    // from. Choosing either is a guess with a patient's record attached.
+    const daily = new Map([
+      [SHEET, new Map([
+        [12, dailyRow(SHEET, 12, 'Cohen', 'Dovid', '2014-01-01')],
+        [40, dailyRow(SHEET, 40, 'Cohen', 'Dovid', '2014-01-01')],
+      ])],
+    ]);
+    const result = planAdoption({
+      queueRows: [queueRow(3, 46225, 99, 'Cohen', 'Dovid', '2014-01-01')],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.matches).toHaveLength(0);
+    expect(result.problems[0]).toMatchObject({ reason: 'identity-ambiguous' });
+  });
+
+  it('still refuses when identity is incomplete', () => {
+    // Two of three fields is how siblings get merged.
+    const daily = new Map([
+      [SHEET, new Map([[12, dailyRow(SHEET, 12, 'Other', 'Person', '2000-01-01')]])],
+    ]);
+    const result = planAdoption({
+      queueRows: [queueRow(3, 46225, 12, 'Cohen', 'Dovid', '')],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.matches).toHaveLength(0);
+    expect(result.problems[0]!.reason).toBe('identity-mismatch');
+  });
+
+  it('does not let two queue rows recover onto the same source row', () => {
+    const daily = new Map([
+      [SHEET, new Map([[9, dailyRow(SHEET, 9, 'Cohen', 'Dovid', '2014-01-01')]])],
+    ]);
+    const result = planAdoption({
+      queueRows: [
+        queueRow(3, 46225, 50, 'Cohen', 'Dovid', '2014-01-01'),
+        queueRow(4, 46225, 51, 'Cohen', 'Dovid', '2014-01-01'),
+      ],
+      daily: sheets,
+      dailyRowsBySheet: daily,
+      newSyncId: mint,
+    });
+    expect(result.matches).toHaveLength(1);
+    expect(result.problems[0]).toMatchObject({ reason: 'source-already-adopted' });
   });
 });

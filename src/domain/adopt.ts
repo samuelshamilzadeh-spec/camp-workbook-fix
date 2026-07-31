@@ -27,6 +27,22 @@ import { sameValue } from './reconcile';
  * This runs once. Afterwards every row has an ID and none of this matters.
  */
 
+/**
+ * Identity of a patient within one daily sheet, for finding a row whose pointer
+ * has drifted.
+ */
+function identityKey(fields: Partial<Record<QueueColumn, unknown>>): string | undefined {
+  const parts = IDENTITY_FIELDS.map((field) => {
+    const value = fields[field];
+    if (isBlank(value)) return '';
+    return field === 'Date of Birth'
+      ? (toDateKey(value) ?? String(value).trim().toLowerCase())
+      : String(value).replace(/\s+/g, ' ').trim().toLowerCase();
+  });
+  // All three are required: two of three is how siblings get merged.
+  return parts.every((part) => part !== '') ? parts.join('|') : undefined;
+}
+
 /** Fields compared to confirm a pointer landed on the right patient. */
 const IDENTITY_FIELDS: readonly QueueColumn[] = [
   'Last Name',
@@ -42,6 +58,14 @@ export interface AdoptionMatch {
   syncId: string;
   /** Identity fields that were present on both sides and agreed. */
   confirmedBy: QueueColumn[];
+  /**
+   * `pointer` — the stored Source Row was correct.
+   * `identity` — the pointer had drifted and the patient was found by name and
+   * date of birth instead.
+   */
+  via: 'pointer' | 'identity';
+  /** How far the stored pointer was wrong by. Only set when via is identity. */
+  drift?: number;
 }
 
 export interface AdoptionProblem {
@@ -52,6 +76,7 @@ export interface AdoptionProblem {
     | 'unknown-source-sheet'
     | 'source-row-out-of-range'
     | 'identity-mismatch'
+    | 'identity-ambiguous'
     | 'too-little-identity'
     | 'source-already-adopted';
   /** Set when a candidate was found but rejected. */
@@ -200,7 +225,41 @@ export function planAdoption(input: AdoptionInput): AdoptionResult {
     }
 
     const rows = input.dailyRowsBySheet.get(sourceSheet);
-    const candidate = rows?.get(sourceRowNumber);
+    let candidate = rows?.get(sourceRowNumber);
+    let via: 'pointer' | 'identity' = 'pointer';
+    let drift: number | undefined;
+
+    // Does the pointer actually land on this patient? If not, find them by who
+    // they are. Observed live: someone inserted one row on one daily sheet and
+    // deleted one on another, and 43 pointers drifted by exactly ±1 within
+    // ninety minutes. The pointer is a hint; identity is the truth.
+    const wanted = identityKey(queueRow.values);
+    const landedOnSomeoneElse =
+      candidate !== undefined && wanted !== undefined && identityKey(candidate.fields) !== wanted;
+
+    if ((candidate === undefined || landedOnSomeoneElse) && wanted !== undefined && rows) {
+      const found: number[] = [];
+      for (const [row, daily] of rows) {
+        if (identityKey(daily.fields) === wanted) found.push(row);
+      }
+
+      if (found.length === 1) {
+        candidate = rows.get(found[0]!);
+        via = 'identity';
+        drift = found[0]! - sourceRowNumber;
+      } else if (found.length > 1) {
+        // The same patient twice on one day. Picking either would be a guess.
+        problems.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          reason: 'identity-ambiguous',
+          sourceSheet,
+          sourceRow: sourceRowNumber,
+        });
+        continue;
+      }
+    }
+
     if (!candidate) {
       problems.push({
         queueSheet: queueRow.sheet,
@@ -251,14 +310,15 @@ export function planAdoption(input: AdoptionInput): AdoptionResult {
       continue;
     }
 
-    const key = `${sourceSheet}!${sourceRowNumber}`;
+    const resolvedRow = candidate.row;
+    const key = `${sourceSheet}!${resolvedRow}`;
     if (claimed.has(key)) {
       problems.push({
         queueSheet: queueRow.sheet,
         queueRow: queueRow.row,
         reason: 'source-already-adopted',
         sourceSheet,
-        sourceRow: sourceRowNumber,
+        sourceRow: resolvedRow,
       });
       continue;
     }
@@ -268,7 +328,9 @@ export function planAdoption(input: AdoptionInput): AdoptionResult {
       queueSheet: queueRow.sheet,
       queueRow: queueRow.row,
       sourceSheet,
-      sourceRow: sourceRowNumber,
+      sourceRow: resolvedRow,
+      via,
+      ...(drift !== undefined && drift !== 0 ? { drift } : {}),
       // Reuse the source row's existing ID when it has one, so a row already
       // stamped is linked rather than given a second identity.
       syncId: candidate.syncId ?? input.newSyncId(),
