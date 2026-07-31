@@ -271,6 +271,9 @@ export class Workbook {
           method: 'POST',
           body: { shift: 'Down' },
           headers: this.sessionHeaders,
+          // Inserting the same gap twice shifts the sheet twice, and every
+          // address still pending in the plan then points a row too high.
+          idempotent: false,
         }),
       );
 
@@ -326,15 +329,6 @@ export class Workbook {
     );
   }
 
-  async clearFill(sheetName: string, address: string): Promise<void> {
-    await this.withSession(() =>
-      this.graph.request(
-        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
-        { method: 'POST', body: {}, headers: this.sessionHeaders },
-      ),
-    );
-  }
-
   /**
    * Inserts `count` blank WHOLE columns at `firstColumn`, shifting everything to
    * the right of it right.
@@ -354,6 +348,9 @@ export class Workbook {
           method: 'POST',
           body: { shift: 'Right' },
           headers: this.sessionHeaders,
+          // Twice is a second blank column, and every value on the tab now sits
+          // one place right of the header describing it.
+          idempotent: false,
         }),
       );
 
@@ -387,6 +384,10 @@ export class Workbook {
           method: 'POST',
           body: { shift: 'Up' },
           headers: this.sessionHeaders,
+          // THE one that matters. A delete that succeeded but did not answer,
+          // retried, takes the patient who moved up into that row. The identity
+          // check in applyRemovals runs above this and has already passed.
+          idempotent: false,
         }),
       );
 

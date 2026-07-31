@@ -28,6 +28,11 @@ export interface RequestOptions {
   maxAttempts?: number;
   /** Overrides the per-attempt timeout for this call. */
   timeoutMs?: number;
+  /**
+   * False for a call that changes the sheet's shape — a row insert or delete.
+   * See REJECTED_BEFORE_EXECUTION.
+   */
+  idempotent?: boolean;
 }
 
 export interface GraphClientOptions {
@@ -67,6 +72,33 @@ const TIMEOUT_MS = 30_000;
 const RETRYABLE_STATUS = new Set([409, 423, 429, 500, 501, 502, 503, 504]);
 
 /**
+ * The subset of those that mean **the request never ran**.
+ *
+ * This distinction only matters for an operation that is not idempotent, and in
+ * this codebase that is exactly two: `insertRows` and `deleteRows`. Everything
+ * else is a PATCH of specific cells or a `/clear`, and running one of those
+ * twice lands on the same result.
+ *
+ * A row delete is different. Deleting row 40 moves row 41 up into it, so a
+ * delete that ALREADY SUCCEEDED and is then retried removes a second patient —
+ * and the identity check in `applyRemovals` cannot catch it, because it runs
+ * above this layer and has already passed by the time the retry fires.
+ *
+ * 409, 423 and 429 are refusals: the file was locked, or we were throttled, and
+ * the service rejected the call before touching the workbook. Retrying those is
+ * safe and is the normal operating condition here — staff are in this file all
+ * day.
+ *
+ * 500, 502, 503, 504 and a client-side timeout are all "no answer". The
+ * operation may have committed. A write issued while two people were editing
+ * was observed hanging for 31 minutes against this workbook, which is precisely
+ * the case where a blind retry deletes the wrong row. So for those, the shape-
+ * changing calls fail and the next cycle re-plans against what the sheet
+ * actually holds — which is what state-based reconciliation is for.
+ */
+const REJECTED_BEFORE_EXECUTION = new Set([409, 423, 429]);
+
+/**
  * 501 is normally "not implemented" and would never be retried. The Excel
  * workbook API overloads it for `OpenWorkbookBlockedWorkbook`, which means the
  * service could not open the file right now — in practice, a desktop client is
@@ -99,7 +131,10 @@ export class GraphClient {
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const method = options.method ?? 'GET';
     const maxAttempts = options.maxAttempts ?? this.maxAttempts;
+    const idempotent = options.idempotent ?? true;
     const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
+    const canRetry = (status: number): boolean =>
+      idempotent ? RETRYABLE_STATUS.has(status) : REJECTED_BEFORE_EXECUTION.has(status);
 
     let lastError: GraphError | undefined;
 
@@ -126,8 +161,11 @@ export class GraphClient {
         // Network failure or timeout. Both retryable on the same budget: a hung
         // request is usually the workbook being momentarily unreachable, and
         // the next attempt commonly succeeds.
+        //
+        // Except for a row insert or delete, where "no answer" is not the same
+        // as "did not happen" — see REJECTED_BEFORE_EXECUTION.
         const timedOut = (error as Error)?.name === 'TimeoutError';
-        if (attempt >= maxAttempts) {
+        if (attempt >= maxAttempts || !idempotent) {
           this.log.error('graph.request_failed', {
             action: method,
             attempt,
@@ -157,7 +195,7 @@ export class GraphClient {
       const requestId = response.headers.get('request-id') ?? undefined;
       lastError = new GraphError(response.status, graphCode, requestId);
 
-      if (!RETRYABLE_STATUS.has(response.status) || attempt >= maxAttempts) {
+      if (!canRetry(response.status) || attempt >= maxAttempts) {
         this.log.error('graph.request_failed', {
           action: method,
           statusCode: response.status,
