@@ -275,6 +275,36 @@ function logPlan(log: Logger, plan: ReconcilePlan, config: RuntimeConfig): void 
     });
   }
 
+  for (const report of plan.blankedOnQueue) {
+    // A field blank on the queue and filled at the source. Never written back —
+    // an empty string clears a cell, and the daily sheet is the billing copy.
+    log.warn('queue.blank_not_written_back', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      field: report.field,
+    });
+  }
+
+  for (const report of plan.duplicateSources) {
+    // Two daily rows sharing one ID, almost always a copied row. Neither is
+    // reconciled, because picking one silently hides the other visit forever.
+    log.warn('source.duplicate_sync_id', {
+      sheet: report.sheet,
+      row: report.row,
+      syncId: report.syncId,
+    });
+  }
+
+  for (const report of plan.wouldDuplicate) {
+    log.warn('queue.append_suppressed', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      reason: report.reason,
+    });
+  }
+
   for (const orphan of plan.orphans) {
     log.warn('queue.orphan_row', {
       queueSheet: orphan.queueSheet,
