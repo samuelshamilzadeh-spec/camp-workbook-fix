@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { LAYOUT, QUEUE_COLUMNS, type QueueColumn, type QueueSheetName } from '../src/config';
+import {
+  LAYOUT,
+  queueColumnsFor,
+  type QueueColumn,
+  type QueueSheetName,
+} from '../src/config';
 import {
   NO_CAMP_LABEL,
   planQueueAppend,
@@ -31,7 +36,7 @@ function queueRange(sheet: QueueSheetName, entries: Entry[]): RangeData {
     const cells: unknown[] = new Array(WIDTH).fill(null);
     switch (entry.kind) {
       case 'header':
-        QUEUE_COLUMNS.forEach((column, index) => {
+        queueColumnsFor(sheet).forEach((column, index) => {
           cells[index] = column;
         });
         break;
@@ -41,10 +46,13 @@ function queueRange(sheet: QueueSheetName, entries: Entry[]): RangeData {
       case 'total':
         cells[0] = `TOTAL - ${entry.count} patients`;
         break;
-      case 'row':
-        cells[2] = entry.last ?? 'Surname';
+      case 'row': {
+        // Derived from the configured column list rather than counted by hand.
+        const index = queueColumnsFor(sheet).indexOf('Last Name');
+        cells[index] = entry.last ?? 'Surname';
         cells[SYNC_ID_INDEX] = entry.syncId ?? null;
         break;
+      }
       case 'blank':
         break;
     }
@@ -273,7 +281,7 @@ describe('planQueueAppend on a populated tab', () => {
     expect(inserts(plan.operations)).toEqual([
       expect.objectContaining({ kind: 'insert-rows', row: 13, count: 1 }),
     ]);
-    expect(writes(plan.operations, 'rows')[0]!.address).toBe('A13:Q13');
+    expect(writes(plan.operations, 'rows')[0]!.address).toBe('A13:R13');
     expect(writes(plan.operations, 'divider')[0]).toMatchObject({
       address: 'A10:A10',
       values: [['Achim - 3 patients']],
@@ -309,7 +317,7 @@ describe('planQueueAppend on a populated tab', () => {
     // Both want row 15. The new camp is written there first, then Bnos Naale
     // inserts at 15 and pushes it down — so the two blocks never overlap.
     const bodyWrites = writes(plan.operations, 'rows');
-    expect(bodyWrites.map((write) => write.address)).toEqual(['A15:Q16', 'A15:Q15']);
+    expect(bodyWrites.map((write) => write.address)).toEqual(['A15:R16', 'A15:R15']);
     expect(inserts(plan.operations).map((op) => op.row)).toEqual([15, 15]);
   });
 
@@ -476,8 +484,10 @@ describe('blank required fields', () => {
     });
 
     const shades = plan.operations.filter((op) => op.kind === 'shade');
-    // C-E are adjacent, K is not, so two ranges rather than four.
-    expect(shades.map((op) => (op as { address: string }).address)).toEqual(['C3:E3', 'K3:K3']);
+    // Last/First/DOB sit at D-F and are adjacent; Phone at L is not, so two
+    // ranges rather than four. They are one column right of where they used to
+    // be, because `Resolved` now sits between Source Row and Last Name.
+    expect(shades.map((op) => (op as { address: string }).address)).toEqual(['D3:F3', 'L3:L3']);
     expect(plan.shadedCells).toBe(4);
   });
 

@@ -1,3 +1,4 @@
+import { offsetColumn } from '../domain/cells';
 import type { GraphClient } from './client';
 
 export interface FileMetadata {
@@ -299,6 +300,175 @@ export class Workbook {
       this.graph.request(
         `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
         { method: 'POST', body: {}, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  /**
+   * Inserts `count` blank WHOLE columns at `firstColumn`, shifting everything to
+   * the right of it right.
+   *
+   * Same reasoning as `insertRows`: scoped to a few rows it would shear the
+   * sheet, so it is always the entire column. This is how `Resolved` gets added
+   * between `Source Row` and `Last Name` on a tab that already holds patients.
+   */
+  async insertColumns(sheetName: string, firstColumn: string, count: number): Promise<void> {
+    if (count <= 0) return;
+    const lastColumn = offsetColumn(firstColumn, count - 1);
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const insert = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Right' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstColumn}1:${lastColumn}1`)}')/entireColumn/insert`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstColumn}:${lastColumn}`)}')/insert`,
+      );
+    }
+  }
+
+  /**
+   * Deletes whole rows, shifting everything below up.
+   *
+   * The one destructive operation in this codebase. It is reached only from an
+   * explicit `Resolved` marker a human typed, never from an inference about what
+   * a row looks like.
+   */
+  async deleteRows(sheetName: string, firstRow: number, count: number): Promise<void> {
+    if (count <= 0) return;
+    const lastRow = firstRow + count - 1;
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const remove = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Up' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await remove(
+        `${sheet}/range(address='${encodeURIComponent(`A${firstRow}:A${lastRow}`)}')/entireRow/delete`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await remove(`${sheet}/range(address='${encodeURIComponent(`${firstRow}:${lastRow}`)}')/delete`);
+    }
+  }
+
+  /**
+   * Sets a number format over a range.
+   *
+   * Graph wants a grid matching the range's shape, so the caller passes the row
+   * and column counts and this fills it. A date written as a serial without this
+   * shows up as `46233`, which is worse than the text it replaced.
+   */
+  async setNumberFormat(
+    sheetName: string,
+    address: string,
+    format: string,
+    rows: number,
+    columns = 1,
+  ): Promise<void> {
+    const numberFormat = Array.from({ length: rows }, () =>
+      Array.from({ length: columns }, () => format),
+    );
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')`,
+        { method: 'PATCH', body: { numberFormat }, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  async setFont(
+    sheetName: string,
+    address: string,
+    font: { bold?: boolean; color?: string; size?: number; name?: string; italic?: boolean },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/font`,
+        { method: 'PATCH', body: font, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  /** Alignment, row height and column width all live on the range's format. */
+  async setRangeFormat(
+    sheetName: string,
+    address: string,
+    format: {
+      horizontalAlignment?: 'General' | 'Left' | 'Center' | 'Right';
+      verticalAlignment?: 'Top' | 'Center' | 'Bottom';
+      rowHeight?: number;
+      columnWidth?: number;
+      wrapText?: boolean;
+    },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format`,
+        { method: 'PATCH', body: format, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  async setBorder(
+    sheetName: string,
+    address: string,
+    edge: 'EdgeTop' | 'EdgeBottom' | 'EdgeLeft' | 'EdgeRight' | 'InsideHorizontal' | 'InsideVertical',
+    border: { style: string; color?: string; weight?: 'Hairline' | 'Thin' | 'Medium' | 'Thick' },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/borders/${edge}`,
+        { method: 'PATCH', body: border, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  /**
+   * A dropdown on a range, so the normal way to mark a row done is a click that
+   * cannot be mistyped.
+   */
+  async setListValidation(sheetName: string, address: string, values: string[]): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/dataValidation`,
+        {
+          method: 'PATCH',
+          body: {
+            rule: { list: { inCellDropDown: true, source: values.join(',') } },
+            // Not `Stop`: a typed `done` is accepted by the reconciler and
+            // refusing the keystroke would be a lie about what the sheet does.
+            errorAlert: { showAlert: false, style: 'Information' },
+          },
+          headers: this.sessionHeaders,
+        },
+      ),
+    );
+  }
+
+  /** Keeps the header visible while staff scroll a thousand-row queue. */
+  async freezeRows(sheetName: string, count: number): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/freezePanes/freezeRows`,
+        { method: 'POST', body: { count }, headers: this.sessionHeaders },
       ),
     );
   }

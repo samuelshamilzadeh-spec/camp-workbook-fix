@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LAYOUT, type QueueSheetName } from '../src/config';
+import { LAYOUT, queueColumnsFor, type QueueColumn, type QueueSheetName } from '../src/config';
 import { parseDailySheet } from '../src/domain/dailySheets';
 import { parseQueueSheet } from '../src/domain/queueSheets';
 import { reconcile, type AppendQueueRowIntent } from '../src/domain/reconcile';
@@ -50,6 +50,7 @@ function queueRange(
   entries: ({ kind: 'header'; camp: string; count: number } | {
     kind: 'row';
     dateOfVisit?: string;
+    resolved?: string;
     last?: string;
     first?: string;
     dob?: string;
@@ -70,14 +71,20 @@ function queueRange(
     if (entry.kind === 'header') {
       cells[0] = `${entry.camp} - ${entry.count} patients`;
     } else {
-      // Queue layout verified against the live tabs: A Date of Visit,
-      // B Source Row, then the daily sheet's D-R in order.
-      cells[0] = entry.dateOfVisit ?? null;
-      cells[2] = entry.last ?? null;
-      cells[3] = entry.first ?? null;
-      cells[4] = entry.dob ?? null;
-      cells[10] = entry.phone ?? null;
-      cells[11] = entry.carrier ?? null;
+      // Positions come from the configured column list rather than being
+      // counted by hand, so inserting a column does not silently move every
+      // value in these fixtures one place to the left.
+      const at = (column: QueueColumn, value: unknown) => {
+        const index = queueColumnsFor(sheet).indexOf(column);
+        if (index !== -1) cells[index] = value ?? null;
+      };
+      at('Date of Visit', entry.dateOfVisit);
+      at('Resolved', entry.resolved);
+      at('Last Name', entry.last);
+      at('First Name', entry.first);
+      at('Date of Birth', entry.dob);
+      at('Phone Number', entry.phone);
+      at('Insurance Carrier', entry.carrier);
       cells[52] = entry.syncId ?? null;
     }
     grid.push(cells);

@@ -1,11 +1,13 @@
 import {
   BLANK_REQUIRED_FILL,
   LAYOUT,
-  QUEUE_COLUMNS,
+  STYLE,
+  queueColumnsFor,
   type QueueColumn,
   type QueueSheetName,
   type WorkbookLayout,
 } from '../config';
+import { toDateCellValue } from './dates';
 import { offsetColumn, rangeAddress } from './cells';
 import { campKey } from './dailySheets';
 import {
@@ -145,6 +147,7 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
   const appends = input.appends.filter((intent) => intent.destination === sheet.sheet);
 
   const firstColumn = layout.queue.firstColumn;
+  const columns = queueColumnsFor(sheet.sheet);
   const existingTotal = sheet.rows.length;
 
   if (appends.length === 0) {
@@ -274,7 +277,7 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
 
     operations.push({
       kind: 'write-cells',
-      address: rangeAddress(firstColumn, firstRow, lastQueueColumnLetter(layout), lastRow),
+      address: rangeAddress(firstColumn, firstRow, lastQueueColumnLetter(sheet.sheet, layout), lastRow),
       values: grid,
       row: firstRow,
       count: grid.length,
@@ -296,7 +299,7 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
     });
 
     for (const shade of shades) {
-      for (const run of contiguousRuns(shade.columns, layout)) {
+      for (const run of contiguousRuns(shade.columns, sheet.sheet, layout)) {
         operations.push({
           kind: 'shade',
           address: rangeAddress(
@@ -341,13 +344,13 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
     const shades: { offset: number; columns: QueueColumn[] }[] = [];
 
     for (const block of newBlocks) {
-      grid.push(dividerRow(formatGroupHeader(block.camp, block.intents.length)));
+      grid.push(dividerRow(formatGroupHeader(block.camp, block.intents.length), columns));
       syncIds.push([null]);
       for (const intent of block.intents) {
         if (intent.blankRequired.length > 0) {
           shades.push({ offset: grid.length, columns: intent.blankRequired });
         }
-        grid.push(patientRow(intent));
+        grid.push(patientRow(intent, columns));
         syncIds.push([intent.syncId]);
       }
     }
@@ -372,7 +375,7 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
       if (intent.blankRequired.length > 0) {
         shades.push({ offset: grid.length, columns: intent.blankRequired });
       }
-      grid.push(patientRow(intent));
+      grid.push(patientRow(intent, columns));
       syncIds.push([intent.syncId]);
     }
 
@@ -434,6 +437,49 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
 }
 
 /**
+ * Rewrites every camp divider and the TOTAL line to match what the sheet
+ * actually holds right now.
+ *
+ * The counts are snapshots taken when a row was written, which is what the
+ * office asked for — but a snapshot goes stale the moment a row is removed, and
+ * rows are removed whenever somebody marks one Done. So this recomputes them
+ * from the parsed sheet and is safe to run at any time: on a sheet nobody has
+ * touched it produces nothing.
+ */
+export function planCountRefresh(
+  sheet: ParsedQueueSheet,
+  layout: WorkbookLayout = LAYOUT,
+): WriteCellsOperation[] {
+  const first = layout.queue.firstColumn;
+  const operations: WriteCellsOperation[] = [];
+
+  for (const group of sheet.groups) {
+    if (group.declaredCount === group.rows.length) continue;
+    operations.push({
+      kind: 'write-cells',
+      address: rangeAddress(first, group.headerRow, first, group.headerRow),
+      values: [[formatGroupHeader(group.camp, group.rows.length)]],
+      row: group.headerRow,
+      count: 1,
+      purpose: 'divider',
+    });
+  }
+
+  if (sheet.totalRow !== undefined && sheet.totalDeclared !== sheet.rows.length) {
+    operations.push({
+      kind: 'write-cells',
+      address: rangeAddress(first, sheet.totalRow, first, sheet.totalRow),
+      values: [[formatGrandTotal(sheet.rows.length)]],
+      row: sheet.totalRow,
+      count: 1,
+      purpose: 'total',
+    });
+  }
+
+  return operations;
+}
+
+/**
  * Groups a row's blank required fields into contiguous column runs, so shading
  * `Last Name`, `First Name` and `Date of Birth` is one call rather than three.
  *
@@ -442,10 +488,12 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
  */
 function contiguousRuns(
   columns: readonly QueueColumn[],
+  destination: QueueSheetName,
   layout: WorkbookLayout,
 ): { firstColumn: string; lastColumn: string; columns: QueueColumn[] }[] {
+  const order = queueColumnsFor(destination);
   const indexed = columns
-    .map((column) => ({ column, index: QUEUE_COLUMNS.indexOf(column) }))
+    .map((column) => ({ column, index: order.indexOf(column) }))
     .filter((entry) => entry.index >= 0)
     .sort((a, b) => a.index - b.index);
 
@@ -477,11 +525,20 @@ function toRun(
   };
 }
 
-/** One patient, every queue column in order, blanks as null rather than "". */
-function patientRow(intent: AppendQueueRowIntent): unknown[] {
-  return QUEUE_COLUMNS.map((column) => {
+/**
+ * One patient, every queue column for that destination in order, blanks as null
+ * rather than "".
+ *
+ * Date columns are converted to Excel serials on the way in. The office asked
+ * for real dates, and a text date cannot be sorted, filtered by range or
+ * formatted — `07/05/2026` and `7/5/2026` are two different strings and the same
+ * day. A value that does not parse as a date is written through untouched.
+ */
+function patientRow(intent: AppendQueueRowIntent, columns: readonly QueueColumn[]): unknown[] {
+  return columns.map((column) => {
     const value = intent.values[column];
-    return value === undefined || value === '' ? null : value;
+    if (value === undefined || value === '') return null;
+    return STYLE.dateColumns.includes(column) ? toDateCellValue(value) : value;
   });
 }
 
@@ -491,8 +548,8 @@ function patientRow(intent: AppendQueueRowIntent): unknown[] {
  * the divider and its patient rows in a single range write, so the block cannot
  * be seen half-built.
  */
-function dividerRow(label: string): unknown[] {
-  const row: unknown[] = new Array(QUEUE_COLUMNS.length).fill(null);
+function dividerRow(label: string, columns: readonly QueueColumn[]): unknown[] {
+  const row: unknown[] = new Array(columns.length).fill(null);
   row[0] = label;
   return row;
 }

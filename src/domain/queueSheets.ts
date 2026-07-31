@@ -1,6 +1,8 @@
 import {
   LAYOUT,
   QUEUE_COLUMNS,
+  RESOLVED_VALUES,
+  queueColumnsFor,
   type QueueColumn,
   type QueueSheetName,
   type WorkbookLayout,
@@ -17,6 +19,29 @@ export interface QueueRow {
   values: Partial<Record<QueueColumn, unknown>>;
   /** Camp group this row currently sits under, from the nearest header above it. */
   camp: string | undefined;
+  /** What the `Resolved` cell says. */
+  resolved: ResolvedSignal;
+}
+
+/**
+ * The state of a row's `Resolved` cell.
+ *
+ * `unrecognized` is a deliberate third state rather than a synonym for `none`.
+ * Somebody typed something in that column meaning to say something, and quietly
+ * ignoring it would leave them believing the row had been dealt with. It is
+ * reported so a human can look, and never acted on.
+ */
+export type ResolvedSignal =
+  | { kind: 'none' }
+  | { kind: 'resolved'; raw: string }
+  | { kind: 'unrecognized'; raw: string };
+
+export function readResolvedSignal(value: unknown): ResolvedSignal {
+  if (isBlank(value)) return { kind: 'none' };
+  const raw = String(value).trim();
+  return RESOLVED_VALUES.includes(raw.toLowerCase())
+    ? { kind: 'resolved', raw }
+    : { kind: 'unrecognized', raw };
 }
 
 export interface CampGroup {
@@ -111,6 +136,7 @@ export function parseGroupHeader(value: unknown): { camp: string; count: number 
 const HEADER_MARKERS = new Set([
   'dateofvisit',
   'sourcerow',
+  'resolved',
   'lastname',
   'lastnm',
   'firstname',
@@ -210,6 +236,7 @@ export function parseQueueSheet(
   const { startRow, startColumn } = parseAddress(used.address);
   const first = layout.queue.firstColumn;
   const shape = detectQueueShape(used, layout);
+  const columns = queueColumnsFor(sheet);
 
   const rows: QueueRow[] = [];
   const groups: CampGroup[] = [];
@@ -232,7 +259,7 @@ export function parseQueueSheet(
     const firstCell = cell(first);
     const restBlank =
       !isBlank(firstCell) &&
-      QUEUE_COLUMNS.slice(1).every((_, index) => isBlank(cell(offsetColumn(first, index + 1))));
+      columns.slice(1).every((_, index) => isBlank(cell(offsetColumn(first, index + 1))));
 
     const header = parseGroupHeader(firstCell) ?? (restBlank && !isGrandTotalRow(firstCell)
       ? { camp: String(firstCell).trim(), count: 0 }
@@ -259,7 +286,7 @@ export function parseQueueSheet(
 
     const values: Partial<Record<QueueColumn, unknown>> = {};
     let hasValue = false;
-    QUEUE_COLUMNS.forEach((column, index) => {
+    columns.forEach((column, index) => {
       const value = cell(offsetColumn(first, index));
       values[column] = value;
       if (!isBlank(value)) hasValue = true;
@@ -274,6 +301,7 @@ export function parseQueueSheet(
       syncId,
       values,
       camp: currentGroup?.camp,
+      resolved: readResolvedSignal(values['Resolved']),
     };
     rows.push(queueRow);
     currentGroup?.rows.push(queueRow);
@@ -321,18 +349,27 @@ export function resolveSheetName(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-/** Column letter on a queue sheet for a given queue column. */
+/**
+ * Column letter on a queue sheet for a given queue column.
+ *
+ * Destination-scoped, because United Refuah has no `Resolved` column and so
+ * every column after `Source Row` sits one place to its left there.
+ */
 export function queueColumnLetter(
   column: QueueColumn,
+  destination: QueueSheetName,
   layout: WorkbookLayout = LAYOUT,
 ): string {
-  const index = QUEUE_COLUMNS.indexOf(column);
-  if (index === -1) throw new Error(`Not a queue column: ${column}`);
+  const index = queueColumnsFor(destination).indexOf(column);
+  if (index === -1) throw new Error(`${column} is not a column on ${destination}`);
   return offsetColumn(layout.queue.firstColumn, index);
 }
 
-export function lastQueueColumnLetter(layout: WorkbookLayout = LAYOUT): string {
-  return offsetColumn(layout.queue.firstColumn, QUEUE_COLUMNS.length - 1);
+export function lastQueueColumnLetter(
+  destination: QueueSheetName,
+  layout: WorkbookLayout = LAYOUT,
+): string {
+  return offsetColumn(layout.queue.firstColumn, queueColumnsFor(destination).length - 1);
 }
 
 /**
@@ -340,11 +377,13 @@ export function lastQueueColumnLetter(layout: WorkbookLayout = LAYOUT): string {
  * columns on every sheet, not just look far away.
  */
 export function assertSyncIdColumnIsClear(layout: WorkbookLayout = LAYOUT): void {
-  const lastData = columnToIndex(lastQueueColumnLetter(layout));
+  // Checked against the WIDEST layout, so adding a column cannot quietly grow
+  // the data past the SyncID column on one tab while the check passes on another.
+  const lastData = columnToIndex(offsetColumn(layout.queue.firstColumn, QUEUE_COLUMNS.length - 1));
   if (columnToIndex(layout.queue.syncIdColumn) <= lastData) {
     throw new Error(
       `Queue SyncID column ${layout.queue.syncIdColumn} overlaps the data columns ` +
-        `(which end at ${lastQueueColumnLetter(layout)}).`,
+        `(which end at ${offsetColumn(layout.queue.firstColumn, QUEUE_COLUMNS.length - 1)}).`,
     );
   }
 }

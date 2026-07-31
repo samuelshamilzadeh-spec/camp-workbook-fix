@@ -3,11 +3,13 @@ import {
   LAYOUT,
   QUEUE_ONLY_COLUMNS,
   REQUIRED_FIELDS,
+  STYLE,
   type QueueColumn,
   type QueueSheetName,
   type WorkbookLayout,
 } from '../config';
 import { isBlank } from './cells';
+import { sameDay } from './dates';
 import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
@@ -61,7 +63,11 @@ export interface RemoveQueueRowIntent {
   /** Set when the source row is known and its column B must also be cleared. */
   sourceSheet: string | undefined;
   sourceRow: number | undefined;
-  reason: 'cleared-on-queue' | 'no-longer-queued-at-source' | 'source-row-missing';
+  reason:
+    | 'resolved-on-queue'
+    | 'cleared-on-queue'
+    | 'no-longer-queued-at-source'
+    | 'source-row-missing';
 }
 
 export type Intent =
@@ -85,10 +91,20 @@ export interface OrphanReport {
   reason: 'unknown-sync-id' | 'missing-sync-id' | 'duplicate-sync-id';
 }
 
+/** Somebody typed something in `Resolved` that is not one of the accepted words. */
+export interface UnrecognizedResolvedReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  /** What they typed. A marker word, never a patient field. */
+  raw: string;
+}
+
 export interface ReconcilePlan {
   intents: Intent[];
   ambiguous: AmbiguityReport[];
   orphans: OrphanReport[];
+  unrecognizedResolved: UnrecognizedResolvedReport[];
   unrecognizedCounts: Record<string, number>;
   counts: Record<string, number>;
 }
@@ -106,6 +122,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   const intents: Intent[] = [];
   const ambiguous: AmbiguityReport[] = [];
   const orphans: OrphanReport[] = [];
+  const unrecognizedResolved: UnrecognizedResolvedReport[] = [];
   const unrecognizedCounts: Record<string, number> = {};
 
   // --- Index the source side -------------------------------------------------
@@ -241,14 +258,14 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       if (APPEND_ONLY_DESTINATIONS.includes(destination)) continue;
 
       // Same queue: reconcile field values. A staff edit on the queue sheet is
-      // authoritative and gets copied back to the daily sheet. Notes and the
-      // Source Row link stay put.
+      // authoritative and gets copied back to the daily sheet. The Resolved
+      // marker and the Source Row link stay put.
       const queueRow = onDestination[0]!;
       for (const [column, queueValue] of Object.entries(queueRow.values)) {
         const field = column as QueueColumn;
         if (QUEUE_ONLY_COLUMNS.includes(field)) continue;
         if (!layout.daily.fieldColumns[field]) continue;
-        if (sameValue(queueValue, dailyRow.fields[field])) continue;
+        if (sameFieldValue(field, queueValue, dailyRow.fields[field])) continue;
 
         intents.push({
           kind: 'write-back',
@@ -259,6 +276,36 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
           queueRow: queueRow.row,
           field,
           value: queueValue,
+        });
+      }
+
+      // Somebody marked this row done. The write-backs above carry whatever they
+      // fixed to the daily sheet; this takes the row off the queue and clears
+      // column B at the source, so the patient rejoins the office's normal flow
+      // instead of being re-appended within seconds by the next cycle.
+      //
+      // The order is not optional: the applier writes the fields back BEFORE it
+      // clears the status and deletes the row, because the queue row is the only
+      // place the fix exists until it has been copied.
+      if (queueRow.resolved.kind === 'resolved') {
+        intents.push({
+          kind: 'remove-queue-row',
+          syncId,
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          sourceSheet: dailyRow.sheet,
+          sourceRow: dailyRow.row,
+          reason: 'resolved-on-queue',
+        });
+      } else if (queueRow.resolved.kind === 'unrecognized') {
+        // Somebody typed something meaning to say something. Acting on it would
+        // be a guess; ignoring it silently would leave them thinking the row was
+        // dealt with.
+        unrecognizedResolved.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          raw: queueRow.resolved.raw,
         });
       }
       continue;
@@ -320,6 +367,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     intents,
     ambiguous,
     orphans,
+    unrecognizedResolved,
     unrecognizedCounts,
     counts: countIntents(intents),
   };
@@ -383,6 +431,31 @@ export function sameValue(a: unknown, b: unknown): boolean {
   if (isBlank(a) && isBlank(b)) return true;
   if (isBlank(a) || isBlank(b)) return false;
   return String(a).trim() === String(b).trim();
+}
+
+/**
+ * Compares one field's value on the queue sheet against the daily sheet.
+ *
+ * Date columns need their own comparison, because the two sides now store a date
+ * differently on purpose: the queue sheets hold an Excel serial so the column
+ * can be sorted and filtered, and the daily sheets hold whatever text staff
+ * typed. `40147` and `11/30/2009` are the same birthday and different strings.
+ *
+ * Compared as strings, every dated row would look like a staff edit on every
+ * cycle — a write-back storm at a five-second cadence, and one that would
+ * overwrite the daily sheets' text with serials.
+ *
+ * The date-aware path is deliberately limited to the columns that hold dates.
+ * Applied to everything it would start reading zip codes and phone numbers as
+ * serial numbers, and two different values would compare equal.
+ */
+export function sameFieldValue(field: QueueColumn, a: unknown, b: unknown): boolean {
+  if (STYLE.dateColumns.includes(field)) {
+    if (isBlank(a) && isBlank(b)) return true;
+    if (isBlank(a) || isBlank(b)) return false;
+    return sameDay(a, b) || sameValue(a, b);
+  }
+  return sameValue(a, b);
 }
 
 function countIntents(intents: Intent[]): Record<string, number> {

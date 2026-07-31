@@ -264,6 +264,17 @@ function logPlan(log: Logger, plan: ReconcilePlan, config: RuntimeConfig): void 
     });
   }
 
+  for (const report of plan.unrecognizedResolved) {
+    // Somebody typed something in Resolved meaning to say something. Acting on
+    // it would be a guess, so it is warned about and left alone.
+    log.warn('queue.resolved_unrecognized', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      keyword: report.raw,
+    });
+  }
+
   for (const orphan of plan.orphans) {
     log.warn('queue.orphan_row', {
       queueSheet: orphan.queueSheet,

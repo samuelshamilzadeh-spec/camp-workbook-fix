@@ -79,20 +79,20 @@ export const IGNORED_TABS: readonly string[] = [
 ] as const;
 
 /**
- * Queue sheet columns, VERIFIED 2026-07-30 against the live tabs.
+ * Queue sheet columns.
  *
- * `Date of Visit` and `Source Row`, then every patient field from the daily
- * sheet, D through R, in the same order. Nothing is dropped: the office
- * confirmed the whole row transfers, insurance ids and medical detail included.
+ * `Date of Visit` and `Source Row`, then `Resolved`, then every patient field
+ * from the daily sheet, D through R, in the same order. Nothing is dropped: the
+ * office confirmed the whole row transfers, insurance ids and medical detail
+ * included.
  *
- * NOTE ON `Notes`: the brief places it immediately after `Source Row`. No live
- * queue tab has it, so it is not here yet. Adding it in Phase 5 shifts every
- * column after B one to the right, which is a migration across all five tabs
- * rather than an edit to this list — do them together.
+ * This is the FULL list. `queueColumnsFor` is what code should use, because
+ * United Refuah does not carry `Resolved` — see below.
  */
 export const QUEUE_COLUMNS = [
   'Date of Visit',
   'Source Row',
+  'Resolved',
   'Last Name',
   'First Name',
   'Date of Birth',
@@ -113,10 +113,62 @@ export const QUEUE_COLUMNS = [
 export type QueueColumn = (typeof QUEUE_COLUMNS)[number];
 
 /**
- * Columns that live only on the queue sheet and must NOT propagate back to the
- * daily sheet. `Notes` joins this list when it is added in Phase 5.
+ * The column layout for one destination.
+ *
+ * `Resolved` is how staff say "I have fixed this row": they fill in whatever was
+ * missing, mark it, and the row leaves the queue while the fix travels back to
+ * the daily sheet. An append-only record has nothing to resolve — a United
+ * Refuah row is copied across and never changes — so that tab keeps the 17
+ * columns it already has and the marker would only be a cell nobody should
+ * touch.
+ *
+ * Adding `Resolved` shifts every column after `Source Row` one to the right.
+ * That is a migration of the live tabs, not an edit to this list; see
+ * `scripts/migrate-queue.ts`.
  */
-export const QUEUE_ONLY_COLUMNS: readonly QueueColumn[] = ['Date of Visit', 'Source Row'] as const;
+export function queueColumnsFor(destination: QueueSheetName): readonly QueueColumn[] {
+  return APPEND_ONLY_DESTINATIONS.includes(destination)
+    ? QUEUE_COLUMNS.filter((column) => column !== 'Resolved')
+    : QUEUE_COLUMNS;
+}
+
+/**
+ * Columns that live only on the queue sheet and must NOT propagate back to the
+ * daily sheet.
+ */
+export const QUEUE_ONLY_COLUMNS: readonly QueueColumn[] = [
+  'Date of Visit',
+  'Source Row',
+  'Resolved',
+] as const;
+
+/**
+ * What staff can put in `Resolved` to mean "done".
+ *
+ * The dropdown offers exactly one value, so the normal path is a click and
+ * cannot be mistyped. These variants exist for the staff member who types
+ * instead — and the list is closed on purpose. Anything else in the cell is
+ * REPORTED and never acted on, the same allow-list discipline that caught the
+ * 1,268-row `needs ohi` trap in column B. Treating any non-blank cell as a
+ * signal would mean a stray keystroke silently pulls a patient off the queue
+ * and wipes their status at source.
+ */
+export const RESOLVED_VALUES: readonly string[] = [
+  'done',
+  'yes',
+  'y',
+  'x',
+  'fixed',
+  'complete',
+  'completed',
+  'resolved',
+  'true',
+  '✓',
+  '✔',
+] as const;
+
+/** The single value the dropdown offers. Must be in RESOLVED_VALUES. */
+export const RESOLVED_DROPDOWN_VALUE = 'Done';
 
 export interface DailySheetLayout {
   /** 1-based row holding the column headers. UNVERIFIED. */
@@ -197,6 +249,64 @@ export const REQUIRED_FIELDS: Record<QueueSheetName, readonly QueueColumn[]> = {
 
 /** Dark red, matching the existing mirror sheets' shading. UNVERIFIED. */
 export const BLANK_REQUIRED_FILL = '#C00000';
+
+/**
+ * How a queue sheet looks.
+ *
+ * The office asked for a consulting-deck treatment applied consistently across
+ * all five tabs, so the rules are here rather than scattered through the code
+ * that draws them: one dark header bar, camp dividers as quiet banded rules
+ * rather than shouty labels, no vertical lines, and colour spent only where it
+ * carries meaning.
+ *
+ * The one loud thing on the sheet stays loud: BLANK_REQUIRED_FILL is the office's
+ * own red and marks a field somebody has to go and chase. Everything else is
+ * deliberately muted so that red is the only thing that draws the eye.
+ */
+export const STYLE = {
+  /** Near-black navy. Reads as black in print and as deliberate on screen. */
+  headerFill: '#051C2C',
+  headerFont: '#FFFFFF',
+  /** Camp divider band: light enough that the patient rows stay dominant. */
+  dividerFill: '#E8EBEE',
+  dividerFont: '#051C2C',
+  /** The grand total, set apart by weight and a rule rather than by colour. */
+  totalFill: '#C9CFD6',
+  totalFont: '#051C2C',
+  /** Horizontal rules only. Vertical lines are what make a sheet look like a form. */
+  ruleColor: '#D4D9DE',
+  fontName: 'Arial',
+  fontSize: 10,
+  headerFontSize: 10,
+  headerRowHeight: 28,
+  dividerRowHeight: 22,
+  dateFormat: 'mm/dd/yyyy',
+  /** Widths in points, by column. Anything unlisted is left alone. */
+  columnWidths: {
+    'Date of Visit': 78,
+    'Source Row': 58,
+    Resolved: 62,
+    'Last Name': 104,
+    'First Name': 104,
+    'Date of Birth': 78,
+    Gender: 52,
+    'Billing Address': 150,
+    City: 92,
+    State: 44,
+    'Zip Code': 58,
+    'Phone Number': 96,
+    'Insurance Carrier': 128,
+    'Insurance ID #': 110,
+    'Medicaid #': 96,
+    'Medical History': 140,
+    Medications: 120,
+    Allergies: 120,
+  } as Partial<Record<QueueColumn, number>>,
+  /** Columns whose values are centred rather than left-aligned. */
+  centeredColumns: ['Source Row', 'Resolved', 'Gender', 'State'] as readonly QueueColumn[],
+  /** Columns holding a real date, formatted and stored as one. */
+  dateColumns: ['Date of Visit', 'Date of Birth'] as readonly QueueColumn[],
+} as const;
 
 export const LAYOUT: WorkbookLayout = {
   daily: {
