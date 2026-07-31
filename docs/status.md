@@ -63,6 +63,8 @@ Each of these was silently costing patients or was one run away from it.
 | Deleting on stale row numbers | no identity check before a delete, on a file staff are always in |
 | `counts` in every log line | redacted to `[redacted:number]`; the job's observability said nothing |
 | The concurrency test | had no workbook session, so it measured its own staleness |
+| `Retry-After: 0` | honoured literally; five retries fired inside a tenth of a second |
+| Write-backs needed no signal | a stale mirror value could overwrite a corrected one on the billing copy |
 
 Full detail in [`docs/phase2b.md`](phase2b.md).
 
@@ -78,10 +80,6 @@ so it can be pointed at the job.
 storage, Log Analytics with a daily cap, Application Insights, Function App, and
 a user-assigned managed identity so there is **no client secret**. Nobody has run
 it. **Nothing runs on a timer.** See [`infra/README.md`](../infra/README.md).
-
-### `phase0-backfill.ts`
-Still written for the single-identifier model. Superseded in practice by
-`adopt-apply.ts`; delete it or update it, but do not run it.
 
 ## Before the timer is enabled
 

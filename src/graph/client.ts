@@ -188,7 +188,16 @@ export class GraphClient {
     const retryAfter = response.headers.get('retry-after');
     if (retryAfter) {
       const seconds = Number(retryAfter);
-      if (Number.isFinite(seconds) && seconds >= 0) {
+      // `> 0`, not `>= 0`. Graph answers a 503 with `Retry-After: 0`, and
+      // honouring that literally spent the whole retry budget in under a tenth
+      // of a second — five attempts at 11-30 ms each, which is not a retry
+      // policy, it is five ways to fail at once. Observed against the live
+      // workbook mid-session.
+      //
+      // A zero means "no guidance", so it falls through to the jittered
+      // exponential backoff below. That is also what stops a fleet of instances
+      // arriving back together the moment a service wobbles.
+      if (Number.isFinite(seconds) && seconds > 0) {
         return Math.min(seconds * 1000, this.maxDelayMs);
       }
     }

@@ -175,3 +175,41 @@ describe('request timeout', () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeDefined();
   });
 });
+
+describe('Retry-After: 0', () => {
+  it('backs off anyway instead of spending the whole budget at once', async () => {
+    // Graph answers a 503 with `Retry-After: 0`. Taken literally that produced
+    // five attempts inside a tenth of a second against the live workbook —
+    // every retry fired while the service was still down.
+    const slept: number[] = [];
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: vi.fn().mockResolvedValue(response(503, {}, { 'retry-after': '0' })) as unknown as typeof fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+
+    await client.request('/x', { maxAttempts: 5 }).catch(() => {});
+
+    expect(slept).toHaveLength(4);
+    expect(slept.every((ms) => ms > 0)).toBe(true);
+    // And it grows, so a service that is properly down is not hammered.
+    expect(slept[3]!).toBeGreaterThan(slept[0]!);
+  });
+
+  it('still honours a real Retry-After', async () => {
+    const slept: number[] = [];
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: vi
+        .fn()
+        .mockResolvedValueOnce(response(429, {}, { 'retry-after': '2' }))
+        .mockResolvedValueOnce(response(200, { ok: true })) as unknown as typeof fetch,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+
+    await client.request('/x');
+    expect(slept).toEqual([2000]);
+  });
+});

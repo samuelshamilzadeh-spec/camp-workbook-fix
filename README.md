@@ -14,7 +14,7 @@ the single chokepoint every write passes through
 
 | Phase | What it does | State |
 |---|---|---|
-| 0 | Add the `SyncID` column, stamp only rows currently carrying a queued keyword | Built — `npm run backfill`, dry run by default |
+| 0 | Bulk-stamp `SyncID`s up front | **Removed.** Superseded by adoption plus lazy stamping |
 | 1 | Read-only. Authenticate, read, log what it *would* change. Zero writes | Built — this is what the timer runs today |
 | 2a | Give the existing queue rows the same `SyncID` as their source row | Done — every linkable row |
 | 2b | Append the patients who have no queue row yet | Done — 1,035 rows across five tabs |
@@ -358,8 +358,11 @@ src/
     dailySheets.ts      daily sheet parsing, camp normalizing, bounded scan
     queueSheets.ts      queue sheet parsing, shape detection, camp groups
     reconcile.ts        state-based reconciliation -> intents
+    compare.ts          does a value MEAN something different? the write-back gate
+    dates.ts            Excel serials, both directions
     adopt.ts            linking the pre-SyncID queue rows to their source rows
     append.ts           Phase 2b: appends -> ordered workbook operations
+    style.ts            the house style, as operations
   graph/
     auth.ts             app-only credential, cached token
     client.ts           retries: 423/409 locks, 429 throttling, jittered backoff
@@ -367,14 +370,19 @@ src/
   state/store.ts        checkpoint + loop-guard marker (blob, or a file locally)
   sync/
     cycle.ts            one reconciliation cycle
+    apply.ts            applying a plan, gated by phase
+    removals.ts         the only code here that destroys data
     context.ts          per-process wiring
   functions/syncTimer.ts  the 5-second timer trigger
 scripts/
   inspect-workbook.ts   answers the pre-build questions, read-only
-  phase0-backfill.ts    ID stamping, dry run by default
-  run-reconcile.ts      one Phase 1 cycle from the CLI
-  adopt-apply.ts        Phase 2a, dry run by default
-  append-queue.ts       Phase 2b, one queue per run, dry run by default
+  run-reconcile.ts      one cycle from the CLI, prints the plan
+  adopt-apply.ts        Phase 2a: link pre-SyncID queue rows
+  append-queue.ts       Phase 2b: append missing rows, one queue per run
+  migrate-queue.ts      Phase 2c: schema, dates, house style, redraw
+  resolve-queue.ts      Phases 3 and 4: write back, clear, remove
   create-queue-sheet.ts adds a missing queue tab and its header row
-  concurrency-test.ts   the pre-Phase-2 write experiment
+  concurrency-test.ts   the write experiment
+infra/
+  main.bicep            everything this has never run on
 ```
