@@ -15,6 +15,7 @@ import {
 } from '../domain/queueSheets';
 import { reconcile, type ReconcilePlan } from '../domain/reconcile';
 import { newSyncId } from '../domain/syncId';
+import { applyPlan } from './apply';
 import { describeError, type Logger } from '../logging';
 import type { StateStore, SyncState } from '../state/store';
 import type { Workbook } from '../graph/workbook';
@@ -213,12 +214,54 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
       };
     }
 
-    // Phases 0 and 2-5 attach their appliers here. Nothing writes yet; see the
-    // phase table in the README.
-    throw new Error(
-      `No applier is wired for phase ${config.phase}. Build phases in order; ` +
-        'see "Build in this order" in the README.',
-    );
+    // --- Apply -------------------------------------------------------------
+    const applied = await applyPlan({
+      workbook,
+      config,
+      plan,
+      daily,
+      queues,
+      tabFor: new Map(bindings.map((binding) => [binding.status, binding.tab])),
+      log,
+    });
+
+    log.info('cycle.applied', {
+      phase: config.phase,
+      count: applied.stamped + applied.appended + applied.wroteBack + applied.removed,
+      counts: {
+        stamped: applied.stamped,
+        appended: applied.appended,
+        wroteBack: applied.wroteBack,
+        removed: applied.removed,
+        skipped: applied.skipped,
+      },
+    });
+
+    // Read the file's timestamp back so the NEXT cycle recognizes this write as
+    // ours and does not treat it as a staff change. Without this the job wakes
+    // itself every five seconds forever, which at this cadence is a throttling
+    // incident rather than merely wasteful.
+    const after = applied.wrote ? await workbook.getFileMetadata() : metadata;
+
+    await state.write({
+      ...previous,
+      lastSeenModified: after.lastModifiedDateTime,
+      lastSeenETag: after.eTag,
+      lastSelfWriteModified: applied.wrote
+        ? after.lastModifiedDateTime
+        : previous.lastSelfWriteModified,
+      lastScannedSheets: scannedSheets,
+      scanCursor: scan.nextCursor,
+      lastFullCycleAt: new Date().toISOString(),
+    });
+
+    return {
+      status: 'planned',
+      plan,
+      scannedSheets,
+      applied: true,
+      durationMs: Date.now() - startedAt,
+    };
   } catch (error) {
     log.error('cycle.failed', describeError(error));
     throw error;
@@ -261,6 +304,61 @@ function logPlan(log: Logger, plan: ReconcilePlan, config: RuntimeConfig): void 
       syncId: report.syncId,
       matched: report.matched,
       destination: report.destination,
+    });
+  }
+
+  for (const report of plan.unrecognizedResolved) {
+    // Somebody typed something in Resolved meaning to say something. Acting on
+    // it would be a guess, so it is warned about and left alone.
+    log.warn('queue.resolved_unrecognized', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      keyword: report.raw,
+    });
+  }
+
+  for (const report of plan.blankedOnQueue) {
+    // A field blank on the queue and filled at the source. Never written back —
+    // an empty string clears a cell, and the daily sheet is the billing copy.
+    log.warn('queue.blank_not_written_back', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      field: report.field,
+    });
+  }
+
+  for (const report of plan.unmarkedEdits) {
+    // A queue value differing from its source on a row nobody marked Resolved.
+    // Never written — the reconciler cannot tell a staff edit from a stale
+    // mirror value, and about 700 rows were adopted from mirrors that stopped
+    // updating a month ago. Surfaced so the difference is visible to a human.
+    log.info('queue.unmarked_edit', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      field: report.field,
+      reason: report.fillsABlank ? 'would fill a blank' : 'would replace a value',
+    });
+  }
+
+  for (const report of plan.duplicateSources) {
+    // Two daily rows sharing one ID, almost always a copied row. Neither is
+    // reconciled, because picking one silently hides the other visit forever.
+    log.warn('source.duplicate_sync_id', {
+      sheet: report.sheet,
+      row: report.row,
+      syncId: report.syncId,
+    });
+  }
+
+  for (const report of plan.wouldDuplicate) {
+    log.warn('queue.append_suppressed', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      reason: report.reason,
     });
   }
 

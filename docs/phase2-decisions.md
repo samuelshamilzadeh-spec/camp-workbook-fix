@@ -131,10 +131,12 @@ behaviour than propagating an edit.
 
 ## Still open
 
-- **Rebuild vs append.** The queue tabs carry the old mirror layout. Building
-  the new structure means rewriting them, but they are live and being edited.
-  Adoption is what makes an in-place rebuild survivable; the order of operations
-  still needs deciding.
+- **Rebuild vs append — settled as append**, 2026-07-31. Nothing is rewritten.
+  New rows go into their camp's existing block, or into a new block at the foot
+  of the body; the divider count and the `TOTAL` line are rewritten, and no
+  existing row is moved except by the row-insert that opens a gap beneath it.
+  Rebuilding a tab that staff are editing was never worth the risk when adoption
+  had already made appending sufficient. See [`phase2b.md`](phase2b.md).
 - **Auto-filling blanks from a sibling visit** (67 cells today). Propagating an
   edit is unambiguous; back-filling from history is a judgement call.
 - **The concurrency test** has not been run. It should be, before writes are

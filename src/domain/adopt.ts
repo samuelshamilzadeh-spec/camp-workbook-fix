@@ -31,7 +31,7 @@ import { sameValue } from './reconcile';
  * Identity of a patient within one daily sheet, for finding a row whose pointer
  * has drifted.
  */
-function identityKey(fields: Partial<Record<QueueColumn, unknown>>): string | undefined {
+export function identityKey(fields: Partial<Record<QueueColumn, unknown>>): string | undefined {
   const parts = IDENTITY_FIELDS.map((field) => {
     const value = fields[field];
     if (isBlank(value)) return '';

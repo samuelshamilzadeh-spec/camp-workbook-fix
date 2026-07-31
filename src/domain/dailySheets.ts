@@ -22,6 +22,16 @@ export interface ParsedDailySheet {
   rows: DailyRow[];
   /** Rows whose column B held something we do not recognize. Count only, never values. */
   unrecognizedRows: number[];
+  /**
+   * Every SyncID on the sheet, by row — including rows with no keyword in
+   * column B, which `rows` deliberately excludes.
+   *
+   * A range write replaces every cell it covers, so stamping row 40 in a block
+   * that also spans row 39 must write row 39 back with the ID it already holds.
+   * Taking that from `rows` alone would blank the ID of any row whose column B
+   * happens to be empty today, which is most of a recent daily sheet.
+   */
+  syncIdsByRow: Map<number, string>;
 }
 
 /**
@@ -38,6 +48,7 @@ export function parseDailySheet(
   const { startRow, startColumn } = parseAddress(used.address);
   const rows: DailyRow[] = [];
   const unrecognizedRows: number[] = [];
+  const syncIdsByRow = new Map<number, string>();
 
   const firstRow = Math.max(startRow, layout.daily.firstDataRow);
   const lastRow = startRow + used.values.length - 1;
@@ -45,6 +56,9 @@ export function parseDailySheet(
   for (let row = firstRow; row <= lastRow; row++) {
     const cell = (column: string): unknown =>
       cellFromGrid(used.values, startRow, startColumn, row, column);
+
+    const existingId = normalizeSyncId(cell(layout.daily.syncIdColumn));
+    if (existingId) syncIdsByRow.set(row, existingId);
 
     const statusRaw = cell(layout.daily.statusColumn);
     const outcome = classifyStatus(statusRaw);
@@ -72,7 +86,7 @@ export function parseDailySheet(
     });
   }
 
-  return { sheet: sheetName, rows, unrecognizedRows };
+  return { sheet: sheetName, rows, unrecognizedRows, syncIdsByRow };
 }
 
 /**
@@ -90,9 +104,18 @@ export function normalizeCamp(raw: unknown): string | undefined {
   return String(raw).replace(/\s+/g, ' ').trim();
 }
 
-/** Case-insensitive grouping key. The display name keeps whatever staff typed. */
+/**
+ * Case-insensitive grouping key. The display name keeps whatever staff typed.
+ *
+ * Whitespace is collapsed as well as lowercased, and it has to be: a camp name
+ * reaching this from a daily sheet has been through `normalizeCamp`, while one
+ * read off a queue divider has only been trimmed. A divider a staff member typed
+ * as `Bnos  Naale` with two spaces would key differently from its own patients,
+ * so the appender would decide the camp had no block and write a second one
+ * below the first.
+ */
 export function campKey(camp: string | undefined): string {
-  return (camp ?? '(no camp)').toLowerCase();
+  return (camp ?? '(no camp)').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export function isDailySheetName(name: string, layout: WorkbookLayout = LAYOUT): boolean {

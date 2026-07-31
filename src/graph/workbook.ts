@@ -1,3 +1,4 @@
+import { offsetColumn } from '../domain/cells';
 import type { GraphClient } from './client';
 
 export interface FileMetadata {
@@ -235,17 +236,239 @@ export class Workbook {
     );
   }
 
+  /**
+   * Inserts `count` blank WHOLE rows at `firstRow`, shifting everything below
+   * down.
+   *
+   * The office's hard constraint is that one row is one patient and nothing may
+   * break that alignment. A range insert scoped to the data columns would shift
+   * A:Q down and leave BA — the SyncID column — where it was, silently pairing
+   * every row below with the previous patient's identifier. So the insert is
+   * always applied to the entire row.
+   *
+   * Two address forms reach the same operation, and which one Graph accepts is
+   * not something this codebase can settle from the documentation:
+   *
+   *   `range(address='A10:A12')/entireRow/insert`   — a range, widened
+   *   `range(address='10:12')/insert`               — Excel's whole-row notation
+   *
+   * The first is tried and the second is the fallback, because a 400 here means
+   * Graph rejected the URL before doing anything — nothing is inserted, nothing
+   * is half-done, and retrying with the other spelling is safe. `GraphClient`
+   * does not retry a 400, so this cannot loop.
+   */
+  async insertRows(sheetName: string, firstRow: number, count: number): Promise<void> {
+    if (count <= 0) return;
+    if (!Number.isInteger(firstRow) || firstRow < 1) {
+      throw new Error(`Not a row number: ${firstRow}`);
+    }
+    const lastRow = firstRow + count - 1;
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const insert = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Down' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`A${firstRow}:A${lastRow}`)}')/entireRow/insert`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstRow}:${lastRow}`)}')/insert`,
+      );
+    }
+  }
+
+  /**
+   * Empties cells.
+   *
+   * This exists because **writing `null` does not clear a cell.** Graph accepts
+   * a values PATCH containing nulls, returns 200, and leaves every one of those
+   * cells exactly as it was. Verified against the live workbook: three cells
+   * holding SyncIDs, PATCHed with `[[null],[null],[null]]`, still held their
+   * SyncIDs afterwards; the `/clear` action emptied them.
+   *
+   * So anything that needs a cell to become empty must come through here. The
+   * one that mattered was clearing column B on a daily sheet after a row is
+   * marked resolved — with a null write that silently did nothing, leaving the
+   * keyword in place and the patient re-appended on the next cycle forever.
+   *
+   * `Contents` leaves formatting alone, which is what almost every caller wants:
+   * the red shading on a blank required field should survive the value being
+   * cleared.
+   */
+  async clearRange(
+    sheetName: string,
+    address: string,
+    applyTo: 'All' | 'Contents' | 'Formats' = 'Contents',
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/clear`,
+        { method: 'POST', body: { applyTo }, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
   async setFill(sheetName: string, address: string, color: string): Promise<void> {
-    await this.graph.request(
-      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
-      { method: 'PATCH', body: { color }, headers: this.sessionHeaders },
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill`,
+        { method: 'PATCH', body: { color }, headers: this.sessionHeaders },
+      ),
     );
   }
 
   async clearFill(sheetName: string, address: string): Promise<void> {
-    await this.graph.request(
-      `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
-      { method: 'POST', body: {}, headers: this.sessionHeaders },
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill/clear`,
+        { method: 'POST', body: {}, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  /**
+   * Inserts `count` blank WHOLE columns at `firstColumn`, shifting everything to
+   * the right of it right.
+   *
+   * Same reasoning as `insertRows`: scoped to a few rows it would shear the
+   * sheet, so it is always the entire column. This is how `Resolved` gets added
+   * between `Source Row` and `Last Name` on a tab that already holds patients.
+   */
+  async insertColumns(sheetName: string, firstColumn: string, count: number): Promise<void> {
+    if (count <= 0) return;
+    const lastColumn = offsetColumn(firstColumn, count - 1);
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const insert = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Right' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstColumn}1:${lastColumn}1`)}')/entireColumn/insert`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await insert(
+        `${sheet}/range(address='${encodeURIComponent(`${firstColumn}:${lastColumn}`)}')/insert`,
+      );
+    }
+  }
+
+  /**
+   * Deletes whole rows, shifting everything below up.
+   *
+   * The one destructive operation in this codebase. It is reached only from an
+   * explicit `Resolved` marker a human typed, never from an inference about what
+   * a row looks like.
+   */
+  async deleteRows(sheetName: string, firstRow: number, count: number): Promise<void> {
+    if (count <= 0) return;
+    const lastRow = firstRow + count - 1;
+    const sheet = worksheetPath(this.workbookPath, sheetName);
+
+    const remove = (path: string) =>
+      this.withSession(() =>
+        this.graph.request(path, {
+          method: 'POST',
+          body: { shift: 'Up' },
+          headers: this.sessionHeaders,
+        }),
+      );
+
+    try {
+      await remove(
+        `${sheet}/range(address='${encodeURIComponent(`A${firstRow}:A${lastRow}`)}')/entireRow/delete`,
+      );
+    } catch (error) {
+      if ((error as { statusCode?: number })?.statusCode !== 400) throw error;
+      await remove(`${sheet}/range(address='${encodeURIComponent(`${firstRow}:${lastRow}`)}')/delete`);
+    }
+  }
+
+  /**
+   * Sets a number format over a range.
+   *
+   * Graph wants a grid matching the range's shape, so the caller passes the row
+   * and column counts and this fills it. A date written as a serial without this
+   * shows up as `46233`, which is worse than the text it replaced.
+   */
+  async setNumberFormat(
+    sheetName: string,
+    address: string,
+    format: string,
+    rows: number,
+    columns = 1,
+  ): Promise<void> {
+    const numberFormat = Array.from({ length: rows }, () =>
+      Array.from({ length: columns }, () => format),
+    );
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')`,
+        { method: 'PATCH', body: { numberFormat }, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  async setFont(
+    sheetName: string,
+    address: string,
+    font: { bold?: boolean; color?: string; size?: number; name?: string; italic?: boolean },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/font`,
+        { method: 'PATCH', body: font, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  /** Alignment, row height and column width all live on the range's format. */
+  async setRangeFormat(
+    sheetName: string,
+    address: string,
+    format: {
+      horizontalAlignment?: 'General' | 'Left' | 'Center' | 'Right';
+      verticalAlignment?: 'Top' | 'Center' | 'Bottom';
+      rowHeight?: number;
+      columnWidth?: number;
+      wrapText?: boolean;
+    },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format`,
+        { method: 'PATCH', body: format, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
+  async setBorder(
+    sheetName: string,
+    address: string,
+    edge: 'EdgeTop' | 'EdgeBottom' | 'EdgeLeft' | 'EdgeRight' | 'InsideHorizontal' | 'InsideVertical',
+    border: { style: string; color?: string; weight?: 'Hairline' | 'Thin' | 'Medium' | 'Thick' },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/borders/${edge}`,
+        { method: 'PATCH', body: border, headers: this.sessionHeaders },
+      ),
     );
   }
 

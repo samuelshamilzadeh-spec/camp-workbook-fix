@@ -58,6 +58,16 @@ async function main(): Promise<void> {
 
   const { workbook, log } = createSyncContext(consoleSink, { phase: 0, dryRun: false });
 
+  // A PERSISTED SESSION, and the test is meaningless without one.
+  //
+  // Run session-less, this measured p50 2604 ms and reported 39 read-back
+  // mismatches out of 40 — which reads as "Graph is losing writes" and is
+  // nothing of the sort. Session-less reads are 30-40x slower AND return the
+  // pre-write picture, both documented in docs/phase2b.md. The harness was
+  // measuring its own staleness and blaming the workbook, on the one test that
+  // gates whether writes are safe to enable at all.
+  await workbook.ensureSession(true);
+
   log.warn('concurrency.start', {
     sheet,
     address: cell,

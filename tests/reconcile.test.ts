@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LAYOUT, type QueueSheetName } from '../src/config';
+import { LAYOUT, queueColumnsFor, type QueueColumn, type QueueSheetName } from '../src/config';
 import { parseDailySheet } from '../src/domain/dailySheets';
 import { parseQueueSheet } from '../src/domain/queueSheets';
 import { reconcile, type AppendQueueRowIntent } from '../src/domain/reconcile';
@@ -50,6 +50,7 @@ function queueRange(
   entries: ({ kind: 'header'; camp: string; count: number } | {
     kind: 'row';
     dateOfVisit?: string;
+    resolved?: string;
     last?: string;
     first?: string;
     dob?: string;
@@ -70,14 +71,20 @@ function queueRange(
     if (entry.kind === 'header') {
       cells[0] = `${entry.camp} - ${entry.count} patients`;
     } else {
-      // Queue layout verified against the live tabs: A Date of Visit,
-      // B Source Row, then the daily sheet's D-R in order.
-      cells[0] = entry.dateOfVisit ?? null;
-      cells[2] = entry.last ?? null;
-      cells[3] = entry.first ?? null;
-      cells[4] = entry.dob ?? null;
-      cells[10] = entry.phone ?? null;
-      cells[11] = entry.carrier ?? null;
+      // Positions come from the configured column list rather than being
+      // counted by hand, so inserting a column does not silently move every
+      // value in these fixtures one place to the left.
+      const at = (column: QueueColumn, value: unknown) => {
+        const index = queueColumnsFor(sheet).indexOf(column);
+        if (index !== -1) cells[index] = value ?? null;
+      };
+      at('Date of Visit', entry.dateOfVisit);
+      at('Resolved', entry.resolved);
+      at('Last Name', entry.last);
+      at('First Name', entry.first);
+      at('Date of Birth', entry.dob);
+      at('Phone Number', entry.phone);
+      at('Insurance Carrier', entry.carrier);
       cells[52] = entry.syncId ?? null;
     }
     grid.push(cells);
@@ -125,7 +132,9 @@ describe('reconcile', () => {
     expect(append.destination).toBe('Missing Info');
     expect(append.camp).toBe('Camp Ramah');
     expect(append.values['Date of Visit']).toBe('2026-07-30');
-    expect(append.values['Source Row']).toBe('2026-07-30!B2');
+    // A plain row number: `planAdoption` reads this cell with `Number()`, and
+    // the existing queue tabs hold a number here too.
+    expect(append.values['Source Row']).toBe(2);
     // Phone is blank and required for Missing Info, so it gets red shading.
     expect(append.blankRequired).toContain('Phone Number');
     expect(append.blankRequired).not.toContain('Last Name');
@@ -185,7 +194,7 @@ describe('reconcile', () => {
     expect(plan.counts['write-back']).toBe(0);
   });
 
-  it('plans a write-back when staff edit a field on the queue sheet', () => {
+  it('plans a write-back when staff edit a field and mark the row Resolved', () => {
     const plan = reconcile({
       daily: [
         parseDailySheet(
@@ -202,6 +211,7 @@ describe('reconcile', () => {
             {
               kind: 'row',
               dateOfVisit: '2026-07-30',
+              resolved: 'Done',
               last: 'Smith',
               first: 'A',
               dob: 'x',
@@ -315,6 +325,112 @@ describe('reconcile', () => {
     });
   });
 
+  it('does not re-append a patient who is already on the right queue and stale on another', () => {
+    // A patient whose column B changed sits on two queue tabs until Phase 4
+    // clears the old one. Indexed by SyncID alone, whichever tab parsed last
+    // won — so the stale row could hide the correct one, and every run planned
+    // another append to a queue the patient was already on. That is a duplicate
+    // per run, found by re-running the appender against a tab it had just
+    // written to the live workbook.
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'verify insurance', camp: 'Achim', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Verify Insurance',
+          queueRange('Verify Insurance', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+        // Parsed after, and under the old rule this one overwrote the row above.
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['append-queue-row']).toBe(0);
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({
+      queueSheet: 'Missing Info',
+      // Still queued, just on the wrong tab — distinct from being finished.
+      reason: 'wrong-queue',
+    });
+  });
+
+  it('reports a second row on the same queue rather than picking one to delete', () => {
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'missing info', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['append-queue-row']).toBe(0);
+    expect(plan.counts['remove-queue-row']).toBe(0);
+    expect(plan.orphans).toEqual([
+      {
+        queueSheet: 'Missing Info',
+        queueRow: LAYOUT.queue.firstDataRow + 1,
+        syncId: 'S000000000001',
+        reason: 'duplicate-sync-id',
+      },
+    ]);
+  });
+
+  it('removes every copy when the source is no longer queued at all', () => {
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'lasante-e', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Verify Insurance',
+          queueRange('Verify Insurance', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
+        ),
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['remove-queue-row']).toBe(2);
+    expect(plan.counts['append-queue-row']).toBe(0);
+  });
+
   it('does not treat a row with one blank required field as cleared', () => {
     // A Missing Info row is missing something by definition. Deleting it would
     // drop exactly the patients this system exists to chase.
@@ -359,7 +475,9 @@ describe('reconcile', () => {
     expect(plan.orphans).toEqual([
       {
         queueSheet: 'Missing Info',
-        queueRow: 10,
+        // The helper lays the data out straight after the header row, so this
+        // follows the configured layout rather than pinning a number.
+        queueRow: LAYOUT.queue.firstDataRow,
         syncId: 'S000000000009',
         reason: 'unknown-sync-id',
       },
@@ -410,5 +528,55 @@ describe('reconcile', () => {
       });
 
     expect(JSON.stringify(build())).toBe(JSON.stringify(build()));
+  });
+});
+
+describe('wrong queue versus finished', () => {
+  const daily = (status: string) =>
+    parseDailySheet(
+      '2026-07-30',
+      dailyRange('2026-07-30', [
+        { status, last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
+      ]),
+    );
+
+  const onMissingInfo = () =>
+    parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
+      ]),
+    );
+
+  it('calls it wrong-queue and appends elsewhere when the patient is still queued', () => {
+    // `no insurance` routes to Not Accepted. Nine live rows were in this state.
+    const plan = reconcile({
+      daily: [daily('no insurance')],
+      queues: [onMissingInfo()],
+      newSyncId: sequentialIds(),
+    });
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({ queueSheet: 'Missing Info', reason: 'wrong-queue' });
+
+    // And the replacement row is planned in the same breath. An applier that
+    // honours the removal without the append leaves the patient on no queue.
+    const appends = plan.intents.filter((i) => i.kind === 'append-queue-row');
+    expect(appends).toHaveLength(1);
+    expect(appends[0]).toMatchObject({ destination: 'Not Accepted', syncId: 'S000000000001' });
+  });
+
+  it('calls it no-longer-queued when the source went terminal, with no append', () => {
+    const plan = reconcile({
+      daily: [daily('lasante-e')],
+      queues: [onMissingInfo()],
+      newSyncId: sequentialIds(),
+    });
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({ reason: 'no-longer-queued-at-source' });
+    expect(plan.counts['append-queue-row']).toBe(0);
   });
 });

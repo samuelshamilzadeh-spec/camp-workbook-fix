@@ -8,6 +8,8 @@ import {
   type WorkbookLayout,
 } from '../config';
 import { isBlank } from './cells';
+import { identityKey } from './adopt';
+import { repairForWrite, sameMeaning } from './compare';
 import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
@@ -61,7 +63,14 @@ export interface RemoveQueueRowIntent {
   /** Set when the source row is known and its column B must also be cleared. */
   sourceSheet: string | undefined;
   sourceRow: number | undefined;
-  reason: 'cleared-on-queue' | 'no-longer-queued-at-source' | 'source-row-missing';
+  reason:
+    | 'resolved-on-queue'
+    | 'cleared-on-queue'
+    /** Still queued, but belongs on a different tab. An append accompanies this. */
+    | 'wrong-queue'
+    /** Not queued anywhere any more: column B went terminal or was cleared. */
+    | 'no-longer-queued-at-source'
+    | 'source-row-missing';
 }
 
 export type Intent =
@@ -82,13 +91,69 @@ export interface OrphanReport {
   queueSheet: QueueSheetName;
   queueRow: number;
   syncId: string | undefined;
-  reason: 'unknown-sync-id' | 'missing-sync-id';
+  reason: 'unknown-sync-id' | 'missing-sync-id' | 'duplicate-sync-id';
+}
+
+/**
+ * A queue value that differs from its source on a row nobody marked Resolved.
+ * Reported, never written — see `pushWriteBacks`.
+ */
+export interface UnmarkedEditReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  field: QueueColumn;
+  /** True when the daily cell is empty, so writing it could only add. */
+  fillsABlank: boolean;
+}
+
+/** Two rows on the daily sheets carrying one SyncID. Neither is reconciled. */
+export interface DuplicateSourceReport {
+  sheet: string;
+  row: number;
+  syncId: string;
+}
+
+/**
+ * An append suppressed because a row for this patient is already on the
+ * destination, carrying no SyncID for it to be recognized by.
+ */
+export interface WouldDuplicateReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  reason: 'unstamped-row-for-this-patient';
+}
+
+/**
+ * A field the queue row leaves blank while the daily sheet has a value.
+ * Reported, never written — see the write-back loop for why.
+ */
+export interface BlankedFieldReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  field: QueueColumn;
+}
+
+/** Somebody typed something in `Resolved` that is not one of the accepted words. */
+export interface UnrecognizedResolvedReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  /** What they typed. A marker word, never a patient field. */
+  raw: string;
 }
 
 export interface ReconcilePlan {
   intents: Intent[];
   ambiguous: AmbiguityReport[];
   orphans: OrphanReport[];
+  unrecognizedResolved: UnrecognizedResolvedReport[];
+  blankedOnQueue: BlankedFieldReport[];
+  unmarkedEdits: UnmarkedEditReport[];
+  duplicateSources: DuplicateSourceReport[];
+  wouldDuplicate: WouldDuplicateReport[];
   unrecognizedCounts: Record<string, number>;
   counts: Record<string, number>;
 }
@@ -106,6 +171,12 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   const intents: Intent[] = [];
   const ambiguous: AmbiguityReport[] = [];
   const orphans: OrphanReport[] = [];
+  const unrecognizedResolved: UnrecognizedResolvedReport[] = [];
+  const blankedOnQueue: BlankedFieldReport[] = [];
+  const unmarkedEdits: UnmarkedEditReport[] = [];
+  const duplicateSources: DuplicateSourceReport[] = [];
+  const wouldDuplicate: WouldDuplicateReport[] = [];
+  const duplicateSourceIds = new Map<string, DailyRow[]>();
   const unrecognizedCounts: Record<string, number> = {};
 
   // --- Index the source side -------------------------------------------------
@@ -138,6 +209,17 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       }
 
       if (row.syncId) {
+        // Two daily rows carrying one ID is a copy-paste: staff enter a repeat
+        // visit by duplicating the patient's row, and column BA travels with it.
+        // 148 patients in this workbook have more than one visit, so it is not a
+        // corner case. Letting the last sheet parsed win made the other visit
+        // invisible to every queue forever, silently, and made which one won
+        // depend on scan order — so neither is reconciled and both are reported.
+        const seen = dailyById.get(row.syncId);
+        if (seen) {
+          duplicateSourceIds.set(row.syncId, [...(duplicateSourceIds.get(row.syncId) ?? [seen]), row]);
+          continue;
+        }
         dailyById.set(row.syncId, row);
       } else if (row.outcome.kind === 'queued') {
         // Stamp at the moment a row first enters a queue, in the same operation
@@ -148,7 +230,28 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   }
 
   // --- Index the queue side --------------------------------------------------
-  const queueById = new Map<string, QueueRow>();
+  //
+  // EVERY row an ID appears on, not just the last one seen.
+  //
+  // A patient legitimately sits on two queue tabs for a while: their column B
+  // changed, so they belong on the new queue and their old row is waiting for
+  // Phase 4 to remove it. Keyed by ID alone, the second tab parsed overwrote the
+  // first, and which one survived depended on the order of QUEUE_SHEET_NAMES.
+  //
+  // That is not a cosmetic problem. If the surviving row was the stale one, the
+  // reconciler concluded "wrong queue" and planned an append to the correct
+  // queue — where the row already was. Every run planned it again, so every run
+  // added another copy of that patient. Caught on the live workbook by
+  // re-running the appender against a tab it had just written: 243 rows written,
+  // and it still wanted to append one of them.
+  const queueById = new Map<string, QueueRow[]>();
+  // Rows carrying no ID are orphans, but they are still ROWS. Dropping them here
+  // made them invisible to the "is this patient already on the destination?"
+  // check below, so the reconciler happily planned a second physical row for a
+  // patient who was already sitting on that tab — the same duplication class the
+  // Map<syncId, QueueRow[]> change fixed, reached from the other side. They are
+  // indexed by who they are instead.
+  const unstampedByIdentity = new Map<string, QueueRow[]>();
   for (const queue of input.queues) {
     for (const row of queue.rows) {
       if (!row.syncId) {
@@ -158,9 +261,24 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
           syncId: undefined,
           reason: 'missing-sync-id',
         });
+        const key = identityKey(row.values);
+        if (key) {
+          const list = unstampedByIdentity.get(`${queue.sheet}|${key}`) ?? [];
+          list.push(row);
+          unstampedByIdentity.set(`${queue.sheet}|${key}`, list);
+        }
         continue;
       }
-      queueById.set(row.syncId, row);
+      const rows = queueById.get(row.syncId) ?? [];
+      rows.push(row);
+      queueById.set(row.syncId, rows);
+    }
+  }
+
+  for (const [syncId, rows] of duplicateSourceIds) {
+    dailyById.delete(syncId);
+    for (const row of rows) {
+      duplicateSources.push({ sheet: row.sheet, row: row.row, syncId });
     }
   }
 
@@ -169,83 +287,260 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     if (row.outcome.kind !== 'queued') continue;
     const syncId = input.newSyncId();
     intents.push({ kind: 'stamp-id', sheet: row.sheet, row: row.row, syncId });
-    intents.push(buildAppend(row, syncId, row.outcome.destination, layout));
+    intents.push(buildAppend(row, syncId, row.outcome.destination));
   }
 
-  // --- 2. Already-stamped source rows ---------------------------------------
-  for (const [syncId, dailyRow] of dailyById) {
-    const queueRow = queueById.get(syncId);
+  /**
+   * Carries a queue row's edited fields back to its source row.
+   *
+   * Shared by the on-destination path and by a wrong-queue row that somebody
+   * marked Done, because both hold real work for the same visit. Deduped per
+   * (row, field) so one field cannot be written twice from two rows.
+   */
+  const writtenBack = new Set<string>();
+  function pushWriteBacks(queueRow: QueueRow, dailyRow: DailyRow, syncId: string): void {
+    // An append-only record never sends anything back. The office confirmed a
+    // United Refuah row is copied across and then never changes.
+    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) return;
 
-    if (dailyRow.outcome.kind === 'queued') {
-      if (!queueRow) {
-        // Stamped but absent from its queue: append. Covers a row whose keyword
-        // changed to a different destination as well, because the stale row is
-        // removed by the pass below.
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination, layout));
+    // NOTHING IS WRITTEN TO A DAILY SHEET WITHOUT A HUMAN SAYING SO.
+    //
+    // The reconciler cannot tell a staff edit from a stale mirror value. Both
+    // are "the queue differs from the source", and roughly 700 of these rows
+    // were adopted from mirror sheets that stopped updating on 2026-07-30 —
+    // so on those rows the daily sheet is the newer copy, not the older one.
+    // Writing back without a signal takes a phone number the office corrected
+    // last week and replaces it with the one the mirror captured last month,
+    // on the record that gets billed from, with nothing to recover it from.
+    //
+    // `Resolved` is that signal, and it is the reason the office asked for the
+    // column: fill in what was missing, mark it, and the fix travels. A row
+    // nobody marked has its differences REPORTED instead — including when the
+    // row is about to be deleted, so the work is never silently lost, only
+    // never silently written.
+    const marked = queueRow.resolved.kind === 'resolved';
+
+    for (const [column, queueValue] of Object.entries(queueRow.values)) {
+      const field = column as QueueColumn;
+      if (QUEUE_ONLY_COLUMNS.includes(field)) continue;
+      if (!layout.daily.fieldColumns[field]) continue;
+      if (sameFieldValue(field, queueValue, dailyRow.fields[field])) continue;
+
+      const once = `${syncId}|${field}`;
+      if (writtenBack.has(once)) continue;
+
+      // Blank on the queue, filled at the source: NEVER written back.
+      //
+      // The rule "a queue value differing from its source is a staff edit"
+      // breaks down completely here, because a blank is what a field looks like
+      // when the old mirror sheets simply never copied it — and roughly 700 rows
+      // were adopted from those sheets. Treating that as an edit sends an empty
+      // string to the daily sheet, and an empty string DOES clear a cell even
+      // though null does not. That is the billing copy of a patient's insurance
+      // carrier.
+      //
+      // A staff member genuinely deleting a value on a queue row is
+      // indistinguishable from a field the mirror never carried, and only one of
+      // those is an instruction. So it is reported and the daily sheet is left
+      // alone.
+      if (isBlank(queueValue) && !isBlank(dailyRow.fields[field])) {
+        blankedOnQueue.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          field,
+        });
         continue;
       }
 
-      if (queueRow.sheet !== dailyRow.outcome.destination) {
-        // Wrong queue. Remove here, append there — the append was emitted above
-        // only when the row was missing entirely, so emit it now.
-        intents.push({
-          kind: 'remove-queue-row',
-          syncId,
+      writtenBack.add(once);
+
+      if (!marked) {
+        unmarkedEdits.push({
           queueSheet: queueRow.sheet,
           queueRow: queueRow.row,
-          sourceSheet: undefined,
-          sourceRow: undefined,
-          reason: 'no-longer-queued-at-source',
+          syncId,
+          field,
+          fillsABlank: isBlank(dailyRow.fields[field]),
         });
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination, layout));
         continue;
+      }
+
+      intents.push({
+        kind: 'write-back',
+        syncId,
+        sourceSheet: dailyRow.sheet,
+        sourceRow: dailyRow.row,
+        queueSheet: queueRow.sheet,
+        queueRow: queueRow.row,
+        field,
+        // Repaired on the way out. `compare.ts` normalizes for comparison only,
+        // so a zip code Excel stripped to `8527` on the way in would otherwise be
+        // written back over `08527` in its damaged form — correctly identified as
+        // a different value, and still wrong.
+        value: repairForWrite(field, queueValue),
+      });
+    }
+  }
+
+  // --- 2. Already-stamped source rows ---------------------------------------
+  //
+  // Every physical queue row this pass has already decided to remove, so the
+  // pass below cannot decide to remove it a second time for a different reason.
+  const removedRows = new Set<string>();
+
+  for (const [syncId, dailyRow] of dailyById) {
+    const queueRows = queueById.get(syncId) ?? [];
+
+    const removeStale = (row: QueueRow, reason: 'wrong-queue' | 'no-longer-queued-at-source'): void => {
+      removedRows.add(`${row.sheet}!${row.row}`);
+      intents.push({
+        kind: 'remove-queue-row',
+        syncId,
+        queueSheet: row.sheet,
+        queueRow: row.row,
+        sourceSheet: undefined,
+        sourceRow: undefined,
+        reason,
+      });
+    };
+
+    if (dailyRow.outcome.kind === 'queued') {
+      const destination = dailyRow.outcome.destination;
+      const onDestination = queueRows.filter((row) => row.sheet === destination);
+
+      // Any row on a queue this patient no longer belongs to goes, whether or
+      // not they also have a row on the right one.
+      //
+      // `wrong-queue`, not `no-longer-queued-at-source`: this patient is still
+      // queued, just somewhere else, and an append to the right tab is emitted
+      // below when they have no row there. The two are separated because an
+      // applier must not delete this row until that append has landed — deleting
+      // both sides of a move leaves the patient on no queue at all. Nine rows on
+      // Missing Info were in exactly this state, their column B reading
+      // `no insurance` and `incorrect insurance`, which route elsewhere.
+      for (const row of queueRows) {
+        if (row.sheet === destination) continue;
+
+        // A row on the wrong queue can still carry real work — somebody may have
+        // typed the missing phone number into it, marked or unmarked. The
+        // replacement row on the correct tab is built from the DAILY sheet, so
+        // anything typed only here is lost the moment this row goes. Carrying it
+        // home first is the difference between finishing their work and deleting
+        // it, and it costs nothing when there is nothing to carry.
+        pushWriteBacks(row, dailyRow, syncId);
+
+        if (row.resolved.kind === 'unrecognized') {
+          unrecognizedResolved.push({
+            queueSheet: row.sheet,
+            queueRow: row.row,
+            syncId,
+            raw: row.resolved.raw,
+          });
+        }
+
+        removeStale(row, 'wrong-queue');
+      }
+
+      if (onDestination.length === 0) {
+        // Before appending, check whether an UNSTAMPED row for this patient is
+        // already sitting on that tab. Adoption could not link it, so it has no
+        // ID — but it is the same person, and appending beside it puts them on
+        // the queue twice.
+        const key = identityKey(dailyRow.fields);
+        const unstamped = key ? unstampedByIdentity.get(`${destination}|${key}`) : undefined;
+        if (unstamped && unstamped.length > 0) {
+          wouldDuplicate.push({
+            queueSheet: destination,
+            queueRow: unstamped[0]!.row,
+            syncId,
+            reason: 'unstamped-row-for-this-patient',
+          });
+          continue;
+        }
+
+        // Not on the queue they belong to: append. Covers both the never-queued
+        // case and the moved-queue case, and the stale row was just removed.
+        intents.push(buildAppend(dailyRow, syncId, destination));
+        continue;
+      }
+
+      if (onDestination.length > 1) {
+        // Two rows on one queue for one visit. Nothing here picks which to keep
+        // — the first is reconciled and the rest are reported, because deleting
+        // a row a human may have been editing is not a guess worth making.
+        for (const row of onDestination.slice(1)) {
+          orphans.push({
+            queueSheet: row.sheet,
+            queueRow: row.row,
+            syncId,
+            reason: 'duplicate-sync-id',
+          });
+        }
       }
 
       // An append-only destination is a record, not a work queue: the office
       // confirmed a United Refuah row is copied across and then never changes,
       // and nothing is ever sent back to the daily sheet.
-      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+      if (APPEND_ONLY_DESTINATIONS.includes(destination)) continue;
 
       // Same queue: reconcile field values. A staff edit on the queue sheet is
-      // authoritative and gets copied back to the daily sheet. Notes and the
-      // Source Row link stay put.
-      for (const [column, queueValue] of Object.entries(queueRow.values)) {
-        const field = column as QueueColumn;
-        if (QUEUE_ONLY_COLUMNS.includes(field)) continue;
-        if (!layout.daily.fieldColumns[field]) continue;
-        if (sameValue(queueValue, dailyRow.fields[field])) continue;
+      // authoritative and gets copied back to the daily sheet. The Resolved
+      // marker and the Source Row link stay put.
+      const queueRow = onDestination[0]!;
+      pushWriteBacks(queueRow, dailyRow, syncId);
 
+
+      // Somebody marked this row done. The write-backs above carry whatever they
+      // fixed to the daily sheet; this takes the row off the queue and clears
+      // column B at the source, so the patient rejoins the office's normal flow
+      // instead of being re-appended within seconds by the next cycle.
+      //
+      // The order is not optional: the applier writes the fields back BEFORE it
+      // clears the status and deletes the row, because the queue row is the only
+      // place the fix exists until it has been copied.
+      if (queueRow.resolved.kind === 'resolved') {
+        removedRows.add(`${queueRow.sheet}!${queueRow.row}`);
         intents.push({
-          kind: 'write-back',
+          kind: 'remove-queue-row',
           syncId,
-          sourceSheet: dailyRow.sheet,
-          sourceRow: dailyRow.row,
           queueSheet: queueRow.sheet,
           queueRow: queueRow.row,
-          field,
-          value: queueValue,
+          sourceSheet: dailyRow.sheet,
+          sourceRow: dailyRow.row,
+          reason: 'resolved-on-queue',
+        });
+      } else if (queueRow.resolved.kind === 'unrecognized') {
+        // Somebody typed something meaning to say something. Acting on it would
+        // be a guess; ignoring it silently would leave them thinking the row was
+        // dealt with.
+        unrecognizedResolved.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          raw: queueRow.resolved.raw,
         });
       }
       continue;
     }
 
     // Terminal (ohi / lasante) or the keyword was removed at the source: the row
-    // does not belong on any queue.
-    if (queueRow) {
-      intents.push({
-        kind: 'remove-queue-row',
-        syncId,
-        queueSheet: queueRow.sheet,
-        queueRow: queueRow.row,
-        sourceSheet: undefined,
-        sourceRow: undefined,
-        reason: 'no-longer-queued-at-source',
-      });
+    // belongs on no queue at all, so every copy of it goes.
+    //
+    // "The daily sheet is already the truth" is not something to assume. A staff
+    // member can type a phone number onto a queue row on Monday without marking
+    // it, and somebody can write `lasante` at the source on Tuesday. Nothing has
+    // carried that number anywhere, and deleting the row is the last chance to.
+    // So the same rule applies here as everywhere: never remove a row without
+    // first taking what is on it.
+    for (const row of queueRows) {
+      pushWriteBacks(row, dailyRow, syncId);
+      removeStale(row, 'no-longer-queued-at-source');
     }
   }
 
   // --- 3. Queue rows with no live source ------------------------------------
-  for (const [syncId, queueRow] of queueById) {
+  for (const [syncId, queueRows] of queueById) {
     const dailyRow = dailyById.get(syncId);
 
     if (!dailyRow) {
@@ -255,12 +550,14 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       // here, so this is reported and never acted on. `selectSheetsToScan`
       // pulls in every sheet referenced by a queue row precisely so that a
       // genuine orphan is rare.
-      orphans.push({
-        queueSheet: queueRow.sheet,
-        queueRow: queueRow.row,
-        syncId,
-        reason: 'unknown-sync-id',
-      });
+      for (const queueRow of queueRows) {
+        orphans.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          reason: 'unknown-sync-id',
+        });
+      }
       continue;
     }
 
@@ -273,9 +570,18 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     // column at all. Until that is settled this uses the conservative reading —
     // the whole row blanked — because it cannot misfire, whereas keying deletion
     // off a single column would delete rows on a stray backspace.
-    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+    for (const queueRow of queueRows) {
+      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+      if (!rowLooksCleared(queueRow)) continue;
 
-    if (rowLooksCleared(queueRow)) {
+      // Section 2 may already have removed this exact row — a patient who moved
+      // queue AND whose old row was blanked produces both a `wrong-queue` and a
+      // `cleared-on-queue` removal for one physical row. Applying both deletes
+      // twice, and the second delete takes whoever moved up into that row; the
+      // `cleared-on-queue` intent also carries a source pointer that would clear
+      // column B for a patient who is still legitimately queued elsewhere.
+      if (removedRows.has(`${queueRow.sheet}!${queueRow.row}`)) continue;
+
       intents.push({
         kind: 'remove-queue-row',
         syncId,
@@ -292,6 +598,11 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     intents,
     ambiguous,
     orphans,
+    unrecognizedResolved,
+    blankedOnQueue,
+    unmarkedEdits,
+    duplicateSources,
+    wouldDuplicate,
     unrecognizedCounts,
     counts: countIntents(intents),
   };
@@ -301,11 +612,19 @@ function buildAppend(
   row: DailyRow,
   syncId: string,
   destination: QueueSheetName,
-  layout: WorkbookLayout,
 ): AppendQueueRowIntent {
   const values: Partial<Record<QueueColumn, unknown>> = { ...row.fields };
+  // `Date of Visit` is written as the daily sheet's own name (`July 30, 2026`)
+  // rather than as an Excel serial. Both are accepted by `resolveSourceSheet`,
+  // and the name needs no locale-dependent date parsing on the way in and tells
+  // a human which tab to open on the way out.
   values['Date of Visit'] = row.sheet;
-  values['Source Row'] = `${row.sheet}!${layout.daily.statusColumn}${row.row}`;
+  // A plain row number, per the office's decision that Source Row carries no
+  // hyperlink. It was briefly written as `July 30, 2026!B45`, which reads well
+  // but is not a number: `planAdoption` parses this cell with `Number()`, so the
+  // combined form would have made every row this project appends unadoptable and
+  // left the column holding two different things.
+  values['Source Row'] = row.row;
 
   const blankRequired = REQUIRED_FIELDS[destination].filter((field) =>
     isBlank(values[field]),
@@ -347,6 +666,17 @@ export function sameValue(a: unknown, b: unknown): boolean {
   if (isBlank(a) && isBlank(b)) return true;
   if (isBlank(a) || isBlank(b)) return false;
   return String(a).trim() === String(b).trim();
+}
+
+/**
+ * Compares one field's value on the queue sheet against the daily sheet.
+ *
+ * Delegates to `sameMeaning`, which compares what a value denotes rather than
+ * how it is spelled — see src/domain/compare.ts for why a string comparison here
+ * called 1,179 cells staff edits when none of them were.
+ */
+export function sameFieldValue(field: QueueColumn, a: unknown, b: unknown): boolean {
+  return sameMeaning(field, a, b);
 }
 
 function countIntents(intents: Intent[]): Record<string, number> {

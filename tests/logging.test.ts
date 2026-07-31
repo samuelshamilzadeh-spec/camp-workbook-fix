@@ -58,3 +58,25 @@ describe('redaction', () => {
     expect(lines[0]).not.toContain('Smith');
   });
 });
+
+describe('count maps stay readable', () => {
+  it('keeps the labels and the numbers inside `counts`', () => {
+    // Checking these keys against the allow-list redacted every number, so the
+    // one line saying what a cycle did carried no information at all.
+    expect(redactPayload({ counts: { stamped: 3, appended: 17, removed: 0 } })).toEqual({
+      counts: { stamped: 3, appended: 17, removed: 0 },
+    });
+  });
+
+  it('still refuses a non-number that turns up in a count map', () => {
+    expect(redactPayload({ counts: { stamped: 3, name: 'Shana Markin' } })).toEqual({
+      counts: { stamped: 3, name: '[redacted:string]' },
+    });
+  });
+
+  it('does not extend that leniency to any other object', () => {
+    expect(redactPayload({ values: { phone: 5551234 } })).toEqual({
+      values: '[redacted:object]',
+    });
+  });
+});
