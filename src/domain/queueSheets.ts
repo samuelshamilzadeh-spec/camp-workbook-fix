@@ -350,21 +350,11 @@ export function resolveSheetName(
 }
 
 /**
- * Column letter on a queue sheet for a given queue column.
+ * Column letter of the LAST queue column for a destination.
  *
  * Destination-scoped, because United Refuah has no `Resolved` column and so
  * every column after `Source Row` sits one place to its left there.
  */
-export function queueColumnLetter(
-  column: QueueColumn,
-  destination: QueueSheetName,
-  layout: WorkbookLayout = LAYOUT,
-): string {
-  const index = queueColumnsFor(destination).indexOf(column);
-  if (index === -1) throw new Error(`${column} is not a column on ${destination}`);
-  return offsetColumn(layout.queue.firstColumn, index);
-}
-
 export function lastQueueColumnLetter(
   destination: QueueSheetName,
   layout: WorkbookLayout = LAYOUT,

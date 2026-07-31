@@ -10,7 +10,7 @@ import {
 import { isBlank } from './cells';
 import { identityKey } from './adopt';
 import { repairForWrite, sameMeaning } from './compare';
-import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
+import type { DailyRow, ParsedDailySheet } from './dailySheets';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
 /**
@@ -690,24 +690,4 @@ function countIntents(intents: Intent[]): Record<string, number> {
     counts[intent.kind] = (counts[intent.kind] ?? 0) + 1;
   }
   return counts;
-}
-
-/** Groups appends by destination and camp, for logging and for Phase 2 batching. */
-export function groupAppends(
-  intents: Intent[],
-): Map<QueueSheetName, Map<string, AppendQueueRowIntent[]>> {
-  const byDestination = new Map<QueueSheetName, Map<string, AppendQueueRowIntent[]>>();
-  for (const intent of intents) {
-    if (intent.kind !== 'append-queue-row') continue;
-    let byCamp = byDestination.get(intent.destination);
-    if (!byCamp) {
-      byCamp = new Map();
-      byDestination.set(intent.destination, byCamp);
-    }
-    const key = campKey(intent.camp);
-    const list = byCamp.get(key) ?? [];
-    list.push(intent);
-    byCamp.set(key, list);
-  }
-  return byDestination;
 }

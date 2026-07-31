@@ -41,8 +41,3 @@ export function getSyncContext(sink: LogSink): SyncContext {
   if (!cached) cached = createSyncContext(sink);
   return cached;
 }
-
-/** Test seam. */
-export function resetSyncContext(): void {
-  cached = undefined;
-}
