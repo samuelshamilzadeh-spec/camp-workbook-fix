@@ -203,10 +203,10 @@ output functionAppName string = functionApp.name
 output identityPrincipalId string = identity.properties.principalId
 output identityClientId string = identity.properties.clientId
 
-@description('Run this as an admin. Bicep cannot grant a Microsoft Graph app role.')
-output grantGraphPermission string = 'az ad app permission add --id ${graphClientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 75359482-378d-4052-8f01-80520e7db3cd=Role && az ad app permission admin-consent --id ${graphClientId}'
+@description('THE step that makes this work. Bicep cannot assign a Microsoft Graph app role, so run this as an admin.')
+output grantGraphToManagedIdentity string = 'az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${identity.properties.principalId}/appRoleAssignments" --headers "Content-Type=application/json" --body \'{"principalId":"${identity.properties.principalId}","resourceId":"GRAPH_SP_OBJECT_ID","appRoleId":"75359482-378d-4052-8f01-80520e7db3cd"}\'  # get GRAPH_SP_OBJECT_ID from: az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv'
 
-@description('The managed identity that needs Files.ReadWrite.All on Microsoft Graph.')
-output identityNeedsGraphRole string = 'Grant Files.ReadWrite.All to principal ${identity.properties.principalId} (see infra/README.md)'
+@description('Only needed for the CLI scripts, which authenticate as the app registration rather than as the identity. Probably already granted.')
+output grantGraphToAppRegistration string = 'az ad app permission add --id ${graphClientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 75359482-378d-4052-8f01-80520e7db3cd=Role && az ad app permission admin-consent --id ${graphClientId}'
 
 output storageAccountName string = storage.name

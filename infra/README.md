@@ -40,9 +40,39 @@ Azure. If the deployment fails on the site name, pick another — nothing else
 depends on it. The storage account name is derived from the resource group id
 rather than from `appName`, precisely so that one cannot collide.
 
-The deployment prints a `grantGraphPermission` command. **Run it as an admin** —
-Bicep cannot assign an app role on Microsoft Graph, so the identity has no access
-to the workbook until somebody does.
+## The grant, which is the step that actually matters
+
+The Function App authenticates as its **managed identity**, not as the app
+registration. That distinction is easy to miss and it is the whole difference
+between a working deployment and one that starts up, reads nothing, and logs
+403s: the app registration already holds `Files.ReadWrite.All` — that is what
+every CLI script in this repo uses — and the managed identity holds nothing at
+all until somebody grants it.
+
+Bicep cannot assign an app role on Microsoft Graph, so this is a manual step for
+someone with Global Administrator or Privileged Role Administrator:
+
+```bash
+PRINCIPAL_ID=<identityPrincipalId from the deployment outputs>
+GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
+
+az rest --method POST \
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PRINCIPAL_ID/appRoleAssignments" \
+  --headers 'Content-Type=application/json' \
+  --body "{\"principalId\":\"$PRINCIPAL_ID\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"75359482-378d-4052-8f01-80520e7db3cd\"}"
+```
+
+`75359482-378d-4052-8f01-80520e7db3cd` is `Files.ReadWrite.All`. Confirm it took:
+
+```bash
+az rest --method GET \
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$PRINCIPAL_ID/appRoleAssignments" \
+  --query "value[].appRoleId" -o tsv
+```
+
+The `grantGraphToAppRegistration` output is only for the CLI scripts, which
+authenticate with the client secret. If `npm run reconcile` already works, that
+grant exists and you do not need it.
 
 ## Then, and not before
 
