@@ -42,16 +42,18 @@ export const APPEND_ONLY_DESTINATIONS: readonly QueueSheetName[] = ['United Refu
 /**
  * Where each queue lives in the live workbook, verified 2026-07-30.
  *
- * `Not Accepted ` really does carry a trailing space, and `Missing Info (New)`
- * is the live tab rather than `Missing Info`. Matching is whitespace- and
- * case-forgiving (see resolveSheetName), so these need only be close.
+ * `Not Accepted ` really does carry a trailing space. Matching is whitespace-
+ * and case-forgiving (see resolveSheetName), so these need only be close.
  *
- * Verify Insurance HAS NO TAB YET — 269 rows need one. Until it is created,
- * those rows have nowhere to go and the cycle reports the queue as absent.
+ * `Missing Info (New)` was RENAMED to `Missing Info` some time before
+ * 2026-07-31. Nothing failed loudly: `resolveSheetName` reported the tab as
+ * absent, the cycle logged `queue.sheet_missing`, and 194 patients were computed
+ * into a queue that no longer had anywhere to put them. A tab rename is a
+ * silent outage in this design, which is worth remembering when one is planned.
  */
 export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
   'Verify Insurance': 'Verify Insurance',
-  'Missing Info': 'Missing Info (New)',
+  'Missing Info': 'Missing Info',
   'Not Accepted': 'Not Accepted',
   'Ineligible & Inactive': 'Ineligible & Inactive',
   // The original tab was renamed `United Refuah (old)` and hidden; a fresh one
@@ -227,11 +229,20 @@ export const LAYOUT: WorkbookLayout = {
     },
   },
   queue: {
-    // The brief describes the existing mirror sheet: instructions in rows 1-7,
-    // headers on row 9, data from row 10. The new queue sheets are built by us,
-    // so we can hold that shape deliberately rather than inheriting it.
-    headerRow: 9,
-    firstDataRow: 10,
+    // VERIFIED 2026-07-31 against all five live tabs: the header is on ROW 1 and
+    // data starts on row 2. Every one of them.
+    //
+    // The brief described the mirror sheet as instructions in rows 1-7, headers
+    // on row 9, data from row 10, and this said 9/10 on that authority. It is
+    // wrong, and it was wrong quietly: rows 2-9 of `Not Accepted ` and
+    // `Ineligible & Inactive` were never read, so 12 real patient rows were
+    // invisible to Phase 1 and were skipped by Phase 2a's adoption.
+    //
+    // `detectQueueShape` now reads the header row off the sheet and these two
+    // numbers are only the fallback for when it finds nothing. They are set to
+    // the truth anyway, because a fallback that is also wrong helps nobody.
+    headerRow: 1,
+    firstDataRow: 2,
     syncIdColumn: 'BA',
     firstColumn: 'A',
   },
@@ -252,6 +263,7 @@ export const LAYOUT: WorkbookLayout = {
     'Missing info 25',
     'Dont Take Ins (old)',
     'Missing Ins info',
+    'Missing Info',
     'Missing Info (New)',
     'Not Accepted ',
     'Ineligible & Inactive',

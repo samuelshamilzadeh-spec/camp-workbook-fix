@@ -1,8 +1,50 @@
 # Phase 2b — appending the patients who have no queue row
 
-Built 2026-07-31. **Not yet run against the live workbook.** Everything below is
-verified by tests against a simulated sheet; nothing here has touched the real
-file.
+Built and first run 2026-07-31. **`United Refuah` is done: 85 patients across 13
+camp blocks, written to the live workbook.** The four other queues are not.
+
+## The first live run
+
+    to append:     85 patients
+    rows added:    98 (patients plus one divider per new camp)
+    row inserts:   0 — writes only past the end of the sheet
+    operations:    3
+
+    --- after ---
+    patient rows:  85   (expected 85)
+    camp blocks:   13
+    TOTAL row:     100 declaring 85
+    rows carrying a SyncID: 85
+
+A second run plans nothing, which is the property that matters: the source rows
+were stamped, so the reconciler no longer thinks they need a queue row.
+
+Three range writes for 85 patients — the block, the SyncID column, the TOTAL —
+plus 43 range writes stamping the source rows across the daily sheets. No row
+inserts, no shading, nothing written back to a daily sheet.
+
+## What the first run found
+
+Two live defects, neither of them in the appender, both of which had been
+silently costing patients:
+
+**The queue header row is row 1 on all five tabs, not row 9.** The build brief
+described an instruction block in rows 1-7 with headers on row 9, and
+`LAYOUT.queue` was set to that on the brief's authority. There is no instruction
+block. Reading from row 10 meant **rows 2-9 of every mirror tab were never
+read**: 18 real patient rows invisible to Phase 1 and skipped by Phase 2a's
+adoption, which is where the "679 of 681" figure came from. `detectQueueShape`
+now reads the header off the sheet, and those rows are visible.
+
+**`Missing Info (New)` had been renamed to `Missing Info`.** `resolveSheetName`
+reported the tab as absent, the cycle logged `queue.sheet_missing`, and **194
+patients were being computed into a queue with nowhere to put them** — no error,
+no failure, just a warning nobody was reading. With the name corrected the
+figure drops to 8, because the other 186 were already sitting on the tab all
+along.
+
+A tab rename is a silent outage in this design. Worth knowing before the office
+plans one.
 
 ## What it does
 
@@ -25,6 +67,28 @@ Per queue, it writes:
 `src/domain/append.ts` decides all of it and touches nothing;
 `scripts/append-queue.ts` executes what it produces. So the plan is printable and
 reviewable before a single cell changes.
+
+## Where the remaining queues stand
+
+Measured after the United Refuah run, with both defects above corrected:
+
+| Queue | Rows to append | Tab state | Inserts needed |
+|---|---|---|---|
+| `Verify Insurance` | 243 | empty, header only | no |
+| `Not Accepted ` | 17 | 400 live rows | yes |
+| `Ineligible & Inactive` | 11 | 1,221 live rows | yes |
+| `Missing Info` | 8 | 229 live rows | yes |
+| `United Refuah` | 0 | **done** | — |
+
+`Verify Insurance` has the same safety profile as United Refuah — empty tab, so
+every row lands past the end and no gap is opened. The other three need
+`--allow-inserts`, which is the first time this project shifts a live row.
+
+**21 queue rows carry no SyncID**, 18 of them the rows 3-9 that were invisible
+until today. `npm run adopt:apply` matches 19 of the 20 candidates and would
+stamp 38 IDs across 17 range writes; one is an `identity-mismatch` that needs a
+human. Until they are linked, a staff edit on those rows cannot reach the daily
+sheet — so adoption should run before those three tabs are appended to.
 
 ## Run United Refuah first
 

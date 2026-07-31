@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUEUE_COLUMNS, type QueueColumn, type QueueSheetName } from '../src/config';
+import { LAYOUT, QUEUE_COLUMNS, type QueueColumn, type QueueSheetName } from '../src/config';
 import {
   NO_CAMP_LABEL,
   planQueueAppend,
@@ -98,7 +98,7 @@ describe('detectQueueShape', () => {
     expect(shape).toMatchObject({ headerRow: 1, firstDataRow: 2, detected: true });
   });
 
-  it('finds a header below an instruction block, as the mirror tabs have', () => {
+  it('finds a header below a block of anything else', () => {
     const shape = detectQueueShape(
       queueRange('Missing Info', [
         ...Array.from({ length: 8 }, () => ({ kind: 'blank' }) as const),
@@ -111,7 +111,11 @@ describe('detectQueueShape', () => {
 
   it('falls back to the configured layout when no header is recognizable', () => {
     const shape = detectQueueShape(queueRange('Missing Info', [{ kind: 'blank' }]));
-    expect(shape).toMatchObject({ headerRow: 9, firstDataRow: 10, detected: false });
+    expect(shape).toMatchObject({
+      headerRow: LAYOUT.queue.headerRow,
+      firstDataRow: LAYOUT.queue.firstDataRow,
+      detected: false,
+    });
   });
 });
 

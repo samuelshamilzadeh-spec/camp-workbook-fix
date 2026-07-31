@@ -361,7 +361,9 @@ describe('reconcile', () => {
     expect(plan.orphans).toEqual([
       {
         queueSheet: 'Missing Info',
-        queueRow: 10,
+        // The helper lays the data out straight after the header row, so this
+        // follows the configured layout rather than pinning a number.
+        queueRow: LAYOUT.queue.firstDataRow,
         syncId: 'S000000000009',
         reason: 'unknown-sync-id',
       },

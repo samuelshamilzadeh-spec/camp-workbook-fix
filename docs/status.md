@@ -29,18 +29,31 @@ finds nothing to do. One row remains unlinked pending a date of birth.
 The standalone `phase0-backfill.ts` still needs updating for the two-identifier
 model (`SyncID` per visit, `PatientID` per person) before it is used.
 
-### Phase 2b — appending the missing rows — BUILT, NOT RUN
+### Phase 2b — appending the missing rows — UNITED REFUAH DONE
 `src/domain/append.ts` plans the appends and `npm run append -- "<queue>"`
 applies them: camp order, `Camp - N patients` dividers, a `TOTAL` line, dark red
 shading on blank required fields, and whole-row inserts. Dry run by default, one
 queue per run, and it refuses to open gaps in a live sheet without
 `--allow-inserts`.
 
-**Nothing has been written to the live workbook.** 219 tests pass, including one
-that applies a plan to a simulated sheet and checks every existing row keeps its
-own SyncID. What remains is a dry run against the real file, then
-`United Refuah` — empty, 85 rows, append-only, no inserts, no shading. See
-[`docs/phase2b.md`](phase2b.md).
+**`United Refuah` is written: 85 patients, 13 camp blocks, 0 row inserts.** A
+second run plans nothing. Remaining: `Verify Insurance` (243, empty tab, no
+inserts), then `Not Accepted ` (17), `Ineligible & Inactive` (11) and
+`Missing Info` (8), which all need `--allow-inserts`.
+See [`docs/phase2b.md`](phase2b.md).
+
+### Two live defects the first run exposed — both fixed in config
+- **The queue header row is row 1, not row 9.** The brief's instruction-block
+  layout does not exist. Reading from row 10 hid rows 2-9 of every mirror tab —
+  18 patient rows invisible to Phase 1 and missed by Phase 2a. That is where
+  "679 of 681" came from.
+- **`Missing Info (New)` was renamed `Missing Info`.** The tab stopped
+  resolving, and 194 patients were being routed to a queue with no sheet. Only a
+  `queue.sheet_missing` warning marked it.
+
+**21 queue rows still carry no SyncID.** `npm run adopt:apply` links 19 of the
+20 candidates; 1 is an `identity-mismatch` needing a human. Run it before
+appending to the three populated tabs.
 
 ### Phase 3 — write-back to the daily sheets
 Intents are computed; no applier. The patient fan-out logic
