@@ -126,11 +126,37 @@ thing that most often goes wrong after a zip deploy, and it fails silently:
 az functionapp function list -g "$RG" -n "$APP" -o table
 ```
 
-`syncTimer` should be listed. An empty table means the zip did not contain a
-recognisable function app: check that `dist/` was built and that the zip has
-`host.json` at its ROOT, not nested inside a folder.
+`syncTimer` should be listed. An empty table is the failure to expect, and it
+has three usual causes, in order of likelihood:
+
+1. **`AzureWebJobsFeatureFlags` is not set to `EnableWorkerIndexing`.** The v4
+   Node model registers functions from code, not from a `function.json` beside
+   each one. Without the flag the host looks for those files, finds none, and
+   reports zero functions — a deployment that succeeded and does nothing.
+
+   ```bash
+   az functionapp config appsettings set -g "$RG" -n "$APP" \
+     --settings AzureWebJobsFeatureFlags=EnableWorkerIndexing
+   az functionapp restart -g "$RG" -n "$APP"
+   ```
+
+2. **`host.json` is not at the zip's root.** `zip -r ../app.zip dist node_modules
+   host.json package.json` from the repo root gets this right; zipping the
+   containing folder does not. Check with `unzip -l ../app.zip | head`.
+
+3. **`dist/` was never built**, so there is nothing for `main` in package.json to
+   match. `npm run build` first, and confirm `dist/src/functions/syncTimer.js`
+   exists before zipping.
+
+Note that the app takes a few seconds to re-index after a restart, so re-run the
+list rather than concluding from the first attempt.
 
 Then read what it is doing. Allow two or three minutes for ingestion:
+
+**In Azure Cloud Shell this fails**: its managed identity cannot get a token for
+`api.applicationinsights.io`. Either run it from a workstation with
+`az login`, or read the same data in the portal under the Function App's
+*Monitor* blade, which needs no extra token.
 
 ```bash
 az extension add --name application-insights --only-show-errors

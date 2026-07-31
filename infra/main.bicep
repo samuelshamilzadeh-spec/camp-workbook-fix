@@ -153,6 +153,12 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       appSettings: [
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'node' }
+        // Required by the v4 Node programming model, which registers functions
+        // from code (`app.timer(...)` in src/functions/syncTimer.ts) rather than
+        // from a `function.json` beside each one. Without it the host looks for
+        // those files, finds none, and reports an app with zero functions — a
+        // deployment that succeeded and does nothing, with no error anywhere.
+        { name: 'AzureWebJobsFeatureFlags', value: 'EnableWorkerIndexing' }
         { name: 'WEBSITE_NODE_DEFAULT_VERSION', value: '~22' }
         {
           name: 'AzureWebJobsStorage'
