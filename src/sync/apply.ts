@@ -40,6 +40,15 @@ import { applyRemovals } from './removals';
  * **Write-backs are carried by the removal applier** for rows being removed, so
  * that a row is never deleted before what is on it has been taken. Only
  * write-backs for rows that are staying are applied here.
+ *
+ * **The tidy-up pass at the end is NOT gated.** Recounting the dividers and
+ * dressing a camp block this cycle created are consequences of appending, and
+ * appending starts at phase 2. Written as early returns, both sat below the
+ * phase 3 and phase 4 gates and so only ever ran at phase 4 — which is not the
+ * phase this goes live in. The first camp to arrive under `SYNC_PHASE=2` would
+ * have got a bare label between banded ones, which is exactly the fix commit
+ * de71c6b was written to make. So phases 3 and 4 are conditional blocks and the
+ * function has one exit.
  */
 
 export interface ApplyPlanInput {
@@ -59,6 +68,8 @@ export interface ApplyPlanResult {
   appended: number;
   wroteBack: number;
   removed: number;
+  /** Source column B cells emptied after a row was marked Done. */
+  cleared: number;
   skipped: number;
   /** Divider and TOTAL lines rewritten because the tab's row count changed. */
   recounted: number;
@@ -76,6 +87,7 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
     appended: 0,
     wroteBack: 0,
     removed: 0,
+    cleared: 0,
     skipped: 0,
     recounted: 0,
     styled: 0,
@@ -187,8 +199,6 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
     }
   }
 
-  if (config.phase < 3) return result;
-
   // --- 3. Write-backs for rows that are STAYING ----------------------------
   //
   // A row being removed has its write-backs applied by the removal pass, one
@@ -199,23 +209,24 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
   const removedRows = new Set(
     removals.map((intent) => `${intent.queueSheet}!${intent.queueRow}`),
   );
-  const staying = writeBacks.filter(
-    (intent) => !removedRows.has(`${intent.queueSheet}!${intent.queueRow}`),
-  );
 
-  for (const intent of staying) {
-    const column = layout.daily.fieldColumns[intent.field];
-    if (!column) continue;
-    await workbook.writeRange(
-      intent.sourceSheet,
-      cellAddress(column, intent.sourceRow),
-      [[intent.value ?? null]],
+  if (config.phase >= 3) {
+    const staying = writeBacks.filter(
+      (intent) => !removedRows.has(`${intent.queueSheet}!${intent.queueRow}`),
     );
-    result.wroteBack++;
-    result.wrote = true;
-  }
 
-  if (config.phase < 4) return result;
+    for (const intent of staying) {
+      const column = layout.daily.fieldColumns[intent.field];
+      if (!column) continue;
+      await workbook.writeRange(
+        intent.sourceSheet,
+        cellAddress(column, intent.sourceRow),
+        [[intent.value ?? null]],
+      );
+      result.wroteBack++;
+      result.wrote = true;
+    }
+  }
 
   // --- 4. Removals ---------------------------------------------------------
   //
@@ -226,44 +237,47 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
   // exists. Asked per SyncID, not by a global counter: one destination failing
   // must not authorise deleting rows whose replacements did land, and — far
   // worse — must not be invisible to rows whose replacements did not.
-  const appendPlanned = new Set(appends.map((intent) => intent.syncId));
-  const safeToRemove = removals.filter((intent) => {
-    if (intent.reason === 'cleared-on-queue') return false; // reported, never applied
-    if (intent.reason !== 'wrong-queue') return true;
+  if (config.phase >= 4) {
+    const appendPlanned = new Set(appends.map((intent) => intent.syncId));
+    const safeToRemove = removals.filter((intent) => {
+      if (intent.reason === 'cleared-on-queue') return false; // reported, never applied
+      if (intent.reason !== 'wrong-queue') return true;
 
-    const syncId = intent.syncId ?? '';
-    // No append planned means they already have a row on the right queue.
-    if (!appendPlanned.has(syncId)) return true;
-    if (appendedOk.has(syncId)) return true;
+      const syncId = intent.syncId ?? '';
+      // No append planned means they already have a row on the right queue.
+      if (!appendPlanned.has(syncId)) return true;
+      if (appendedOk.has(syncId)) return true;
 
-    log.warn('apply.removal_deferred', {
-      queueSheet: intent.queueSheet,
-      row: intent.queueRow,
-      syncId,
-      reason: 'the replacement row was not written, so this is the only row this patient has',
+      log.warn('apply.removal_deferred', {
+        queueSheet: intent.queueSheet,
+        row: intent.queueRow,
+        syncId,
+        reason: 'the replacement row was not written, so this is the only row this patient has',
+      });
+      return false;
     });
-    return false;
-  });
 
-  const removalResult = await applyRemovals({
-    workbook,
-    removals: safeToRemove,
-    writeBacks: writeBacks.filter((intent) =>
-      removedRows.has(`${intent.queueSheet}!${intent.queueRow}`),
-    ),
-    tabFor: tabFor as ReadonlyMap<string, string>,
-    log,
-    layout,
-  });
+    const removalResult = await applyRemovals({
+      workbook,
+      removals: safeToRemove,
+      writeBacks: writeBacks.filter((intent) =>
+        removedRows.has(`${intent.queueSheet}!${intent.queueRow}`),
+      ),
+      tabFor: tabFor as ReadonlyMap<string, string>,
+      log,
+      layout,
+    });
 
-  result.removed = removalResult.deleted;
-  result.wroteBack += removalResult.wrote;
-  result.skipped += removalResult.skipped;
-  if (removalResult.deleted > 0 || removalResult.wrote > 0) result.wrote = true;
+    result.removed = removalResult.deleted;
+    result.wroteBack += removalResult.wrote;
+    result.cleared += removalResult.cleared;
+    result.skipped += removalResult.skipped;
+    if (removalResult.deleted > 0 || removalResult.wrote > 0) result.wrote = true;
 
-  for (const intent of safeToRemove) {
-    const tab = tabFor.get(intent.queueSheet);
-    if (tab) touchedTabs.add(tab);
+    for (const intent of safeToRemove) {
+      const tab = tabFor.get(intent.queueSheet);
+      if (tab) touchedTabs.add(tab);
+    }
   }
 
   // --- 5. Bring the counts back into line ----------------------------------

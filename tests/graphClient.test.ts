@@ -213,3 +213,82 @@ describe('Retry-After: 0', () => {
     expect(slept).toEqual([2000]);
   });
 });
+
+/**
+ * A row insert or delete is not idempotent, and "no answer" is not "did not
+ * happen". A delete that succeeded server-side and then timed out, retried,
+ * takes the patient who moved up into that row — and the identity check in
+ * applyRemovals runs above this layer and has already passed.
+ */
+describe('a non-idempotent call', () => {
+  const client = (fetchImpl: unknown) =>
+    new GraphClient(tokens, log, {
+      fetchImpl: fetchImpl as typeof fetch,
+      sleep: async () => {},
+    });
+
+  it('is NOT retried after a 500, because the row may already be gone', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(response(500, { error: { code: 'InternalServerError' } }))
+      .mockResolvedValueOnce(response(200, { ok: true }));
+
+    await expect(
+      client(fetchImpl).request('/delete', { method: 'POST', idempotent: false }),
+    ).rejects.toBeInstanceOf(GraphError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('is NOT retried after a 503 or a 504 either', async () => {
+    for (const status of [503, 504]) {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(response(status, {}))
+        .mockResolvedValueOnce(response(200, { ok: true }));
+
+      await expect(
+        client(fetchImpl).request('/delete', { method: 'POST', idempotent: false }),
+      ).rejects.toBeInstanceOf(GraphError);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('is NOT retried after a client-side timeout', async () => {
+    const fetchImpl = vi.fn().mockImplementationOnce(() => {
+      const error = new Error('The operation was aborted due to timeout');
+      error.name = 'TimeoutError';
+      return Promise.reject(error);
+    });
+
+    await expect(
+      client(fetchImpl).request('/delete', { method: 'POST', idempotent: false }),
+    ).rejects.toThrow(/timeout/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('IS still retried on a lock or a throttle, which never reached the workbook', async () => {
+    for (const status of [409, 423, 429]) {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(response(status, {}))
+        .mockResolvedValueOnce(response(200, { ok: true }));
+
+      await expect(
+        client(fetchImpl).request('/delete', { method: 'POST', idempotent: false }),
+      ).resolves.toEqual({ ok: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('leaves ordinary calls alone: a cell PATCH still retries a 500', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(response(500, {}))
+      .mockResolvedValueOnce(response(200, { ok: true }));
+
+    await expect(client(fetchImpl).request('/x', { method: 'PATCH' })).resolves.toEqual({
+      ok: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});

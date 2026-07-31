@@ -22,9 +22,7 @@ export interface SyncState {
    * change since last cycle was ours and there is nothing to do.
    */
   lastSelfWriteModified?: string;
-  /** Identity that last modified the file, so a self-write is recognizable. */
-  lastSelfWriteBy?: string;
-  /** Daily sheets touched last cycle, used to bound the next scan. */
+  /** Daily sheets touched last cycle. Diagnostic only — written, never read back. */
   lastScannedSheets?: string[];
   /**
    * Rotation position in the cold pool, so successive cycles sweep the rest of
@@ -109,9 +107,36 @@ export class MemoryStateStore implements StateStore {
   }
 }
 
+/**
+ * Blob storage when there is a connection string, a local file when there is
+ * not — but never a local file when running in Azure.
+ *
+ * The fallback is for `npm run reconcile` on a laptop. Reached inside a Function
+ * App it is silent and permanent damage: a Consumption app's filesystem is
+ * read-only under `WEBSITE_RUN_FROM_PACKAGE`, so every `state.write` throws, the
+ * checkpoint never persists, and `lastSelfWriteModified` never gets set. That
+ * last one is the loop guard — without it the job treats its OWN writes as staff
+ * changes and re-plans every five seconds forever, which is the throttling
+ * incident the guard exists to prevent.
+ *
+ * It is also easy to reach by accident: switching `AzureWebJobsStorage` to the
+ * identity-based `AzureWebJobsStorage__accountName` form leaves no connection
+ * string for this to find. So in Azure it fails loudly at startup instead.
+ */
 export function createStateStore(config: RuntimeConfig): StateStore {
   if (config.stateConnectionString && !/UseDevelopmentStorage/i.test(config.stateConnectionString)) {
     return new BlobStateStore(config.stateConnectionString, config.stateContainer);
   }
+
+  // Set by App Service on every instance; absent on a developer machine.
+  if (process.env.WEBSITE_INSTANCE_ID) {
+    throw new Error(
+      'No storage connection string, so checkpoint state would fall back to the local ' +
+        'filesystem — which is read-only here, making the loop guard silently ineffective. ' +
+        'Set AZURE_STORAGE_CONNECTION_STRING or AzureWebJobsStorage (the connection-string ' +
+        'form, not AzureWebJobsStorage__accountName).',
+    );
+  }
+
   return new FileStateStore(join(process.cwd(), '.state', BLOB_NAME));
 }

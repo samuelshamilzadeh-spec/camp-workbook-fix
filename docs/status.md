@@ -1,6 +1,6 @@
 # Where this project stands
 
-Last updated 2026-07-31.
+Last updated 2026-07-31, after a full pre-merge sweep of the branch.
 
 ## The workbook is fully reconciled
 
@@ -68,6 +68,47 @@ Each of these was silently costing patients or was one run away from it.
 
 Full detail in [`docs/phase2b.md`](phase2b.md).
 
+## What the pre-merge sweep found
+
+Four defects, none of which any test caught, all fixed on this branch.
+
+| | |
+|---|---|
+| **A retried row delete removes a second patient** | `insertRows` and `deleteRows` are POSTs, and 500/502/503/504 and a client-side timeout were all on the retry list. None of those means the operation did not happen — a delete that committed and then timed out, retried, takes whoever moved up into that row. The identity check in `applyRemovals` runs above the retry and has already passed by then. A write against this workbook was observed hanging for 31 minutes, so this was reachable. Those two calls now retry only on 409/423/429, which are refusals that never touched the file. |
+| **New camp blocks went undressed at the phase we go live in** | Recounting the dividers and styling a camp block the cycle just created were written below the phase 3 and phase 4 early returns, so they only ran at phase 4. Appending starts at **phase 2**, which is the setting the cutover uses. The first camp to arrive would have got a bare label between banded ones — exactly what de71c6b was written to prevent. Phases 3 and 4 are conditional blocks now and the function has one exit. |
+| **A typo'd number setting degraded silently** | `Number('ninety')` is NaN and NaN does not throw. `SYNC_MAX_SHEETS_PER_CYCLE` made `daily.length <= NaN` false, switching the scan to tiering; `SYNC_COLD_BATCH_SIZE` then took NaN sheets per rotation, so the cold pool was never read and any sheet outside the hot window stopped reconciling. Nothing logged. All five numeric settings are now range-checked at startup, as `SYNC_PHASE` always was. |
+| **The checkpoint could silently stop persisting in Azure** | With no storage connection string the state store fell back to a local file. A Consumption app's filesystem is read-only, so every write throws, `lastSelfWriteModified` never persists, and the loop guard stops working — the job then treats its own writes as staff changes every five seconds. Easy to reach by switching `AzureWebJobsStorage` to the identity-based `__accountName` form. It now fails loudly at startup instead. |
+
+Smaller: `cleared` and `styled` were counted and then dropped before the log line;
+a configuration error thrown while building the sync context escaped before any
+logger existed, so an app failing every invocation said nothing.
+
+### Code that was written and then overtaken
+
+Removed, all recoverable from git history:
+
+- **`src/domain/patient.ts`** and its 23 tests — cross-visit propagation, "a fix
+  typed once reaches every visit". Superseded by the rule that nothing reaches a
+  daily sheet without a human marking `Resolved`. Imported by nothing but its own
+  test. The open question about 72 patients whose repeat visits disagree is still
+  open; this module was not answering it.
+- `groupAppends` — append batching, which ended up in `planQueueAppend`.
+- `planBlankRequiredShading` and the `shadeBlankRequired` option that was
+  declared on `PlanQueueStyleInput` and never read by the function.
+- `RESOLVED_DROPDOWN_VALUE` imported into `style.ts` and never used — left over
+  from setting the dropdown through Graph, which 400s.
+- `LAYOUT.controlSheetName` — the loop guard was going to be a marker on a hidden
+  `_SyncControl` sheet before it became `lastSelfWriteModified` in the blob
+  checkpoint. `notesSheetName` went the same way; Phase 5 can declare its own.
+- `IGNORED_TABS`, duplicating `knownNonDailySheets`, which is the list actually
+  consulted.
+- `queueColumnLetter`, `Workbook.clearFill`, `resetSyncContext`,
+  `SyncState.lastSelfWriteBy` — no callers.
+
+`lastSeenETag`, `lastScannedSheets` and `lastFullCycleAt` are written to the
+checkpoint and never read back. Kept deliberately: they cost nothing and they are
+what you look at when a cycle misbehaves.
+
 ## Not built
 
 ### Phase 5 — the notes sheet
@@ -75,13 +116,31 @@ Not started. Adding `Notes` shifts every column right on all five tabs again;
 `scripts/migrate-queue.ts` is now the tool for that and its guard is structural,
 so it can be pointed at the job.
 
-### Azure infrastructure — DEPLOYED 2026-07-31, code not yet published
+### Azure infrastructure — DEPLOYED 2026-07-31, publishing not yet confirmed
 Resource group `camp-workbook-sync` in eastus holds all eight resources:
 Consumption plan, storage `ste24s24d74i4egcampworkb` with the state container,
 Log Analytics capped at 1 GB/day, Application Insights, the Function App, and a
 user-assigned managed identity.
 
-**The code has not been published to it and nothing runs on a timer yet.**
+**Nothing runs on a timer yet.** Publishing the code by hand ran into four
+separate Linux Consumption traps, each of which presents as a healthy deployment
+that does nothing — `config-zip` setting `WEBSITE_RUN_FROM_PACKAGE=1` (which that
+plan does not accept), a missing `AzureWebJobsFeatureFlags=EnableWorkerIndexing`,
+`func` unable to identify the project without a `local.settings.json`, and
+`az webapp log tail` 404ing because there is no SCM log stream. All four are
+written up in [`infra/README.md`](../infra/README.md).
+
+Whether the publish finally landed is not recorded anywhere and cannot be read
+off this repository. Check it:
+
+```bash
+az functionapp function list -g camp-workbook-sync -n "$APP" -o table
+```
+
+`syncTimer` should be listed. An empty table is the failure to expect.
+
+Once this branch is on `main`, `.github/workflows/deploy.yml` deploys on every
+push to `main` over OIDC, which is the route to prefer over publishing by hand.
 
 The identity cannot reach the workbook until a Global Administrator assigns it
 `Files.ReadWrite.All` on Microsoft Graph — Bicep cannot do that. Until then the
@@ -98,7 +157,11 @@ that permission. Both routes and the swap between them are in
 - **Two settings in Excel, per tab.** Graph refuses both: freeze the header row,
   and the `Resolved` dropdown. Neither is load-bearing.
 - **Rotate the client secrets.** Several were created during setup and at least
-  three have appeared in chat transcripts. `az ad app credential list`.
+  four have now appeared in chat transcripts — treat every one of them as
+  compromised. `az ad app credential list --id <app-id> -o table`, then
+  `az ad app credential delete --id <app-id> --key-id <keyId>` for each old key
+  after the replacement is in place. The Function App does not need one at all
+  once the identity has its Graph grant.
 
 ## Open questions
 

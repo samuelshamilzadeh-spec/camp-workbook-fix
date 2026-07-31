@@ -63,20 +63,11 @@ export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
 };
 
 /**
- * Superseded or historical tabs. The office confirmed these are not live and
- * must never be read or written.
+ * Superseded or historical tabs — `United Refuah (old)`, `Dont Take Ins (old)`,
+ * `Missing Ins info`, `Missing info 25`, `2025 Archive`, `2024 Archive` — are
+ * excluded by `LAYOUT.knownNonDailySheets` below, which is the list the scan
+ * actually consults. A second list here duplicated it and was read by nothing.
  */
-export const IGNORED_TABS: readonly string[] = [
-  // Hidden by the office 2026-07-30 and explicitly out of scope: as far as this
-  // code is concerned these tabs do not exist. Never read, never written.
-  'United Refuah (old)',
-  'Dont Take Ins (old)',
-  'Missing Ins info',
-  // Historical.
-  'Missing info 25',
-  '2025 Archive',
-  '2024 Archive',
-] as const;
 
 /**
  * Queue sheet columns.
@@ -200,10 +191,6 @@ export interface QueueSheetLayout {
 export interface WorkbookLayout {
   daily: DailySheetLayout;
   queue: QueueSheetLayout;
-  /** Hidden sheet holding SyncID -> note text. Phase 5. */
-  notesSheetName: string;
-  /** Hidden sheet holding the loop-guard marker written after each of our own write batches. */
-  controlSheetName: string;
   /**
    * Sheets that are never daily visit sheets. Anything not matching
    * `dailySheetPattern` is skipped anyway; this list is for logging clarity.
@@ -356,8 +343,13 @@ export const LAYOUT: WorkbookLayout = {
     syncIdColumn: 'BA',
     firstColumn: 'A',
   },
-  notesSheetName: '_SyncNotes',
-  controlSheetName: '_SyncControl',
+  // No `controlSheetName` here any more. The loop guard was going to be a
+  // marker written to a hidden `_SyncControl` sheet; it became
+  // `lastSelfWriteModified` in the blob checkpoint instead, because reading a
+  // sheet to decide whether to read the workbook defeats the one-call change
+  // check. The name sat in the layout unread ever since. Phase 5's `_SyncNotes`
+  // went the same way — it can be declared when Phase 5 is actually built.
+  //
   // VERIFIED 2026-07-30 against the live workbook: every tab that is not a
   // daily visit sheet. Several are historical or superseded, kept here so the
   // scan never mistakes one for a daily sheet.
@@ -535,6 +527,32 @@ function boolEnv(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+/**
+ * A number setting, or a clear failure.
+ *
+ * `Number(env(...) ?? '7')` was silently producing NaN for a typo'd value, and
+ * NaN does not throw — it degrades. `SYNC_MAX_SHEETS_PER_CYCLE=ninety` made
+ * `daily.length <= NaN` false, which switched the scan from "every sheet every
+ * cycle" to tiering; `SYNC_COLD_BATCH_SIZE` then took NaN sheets per rotation,
+ * so the cold pool was never read at all and any sheet outside the hot window
+ * stopped reconciling. Nothing logged, nothing failed, patients just stopped
+ * appearing on queues.
+ *
+ * SYNC_PHASE has been validated since the beginning. These are no different.
+ */
+function intEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = env(name);
+  if (raw === undefined) return fallback;
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(
+      `${name} must be an integer between ${min} and ${max}, got "${raw}". See .env.example.`,
+    );
+  }
+  return value;
+}
+
 export interface LoadConfigOptions {
   /**
    * `scripts/resolve-workbook.ts` exists precisely to discover GRAPH_DRIVE_ID
@@ -574,11 +592,13 @@ export function loadConfig(options: LoadConfigOptions = {}): RuntimeConfig {
     // Dry run defaults to ON. Turning writes on has to be a deliberate act.
     dryRun: boolEnv('SYNC_DRY_RUN', true),
     layoutVerified: boolEnv('SYNC_LAYOUT_VERIFIED', false),
-    hotDaysBack: Number(env('SYNC_HOT_DAYS_BACK') ?? '7'),
-    hotDaysForward: Number(env('SYNC_HOT_DAYS_FORWARD') ?? '14'),
-    coldBatchSize: Number(env('SYNC_COLD_BATCH_SIZE') ?? '10'),
-    maxSheetsPerCycle: Number(env('SYNC_MAX_SHEETS_PER_CYCLE') ?? '90'),
-    readConcurrency: Number(env('SYNC_READ_CONCURRENCY') ?? '8'),
+    hotDaysBack: intEnv('SYNC_HOT_DAYS_BACK', 7, 0, 3650),
+    hotDaysForward: intEnv('SYNC_HOT_DAYS_FORWARD', 14, 0, 3650),
+    coldBatchSize: intEnv('SYNC_COLD_BATCH_SIZE', 10, 1, 1000),
+    maxSheetsPerCycle: intEnv('SYNC_MAX_SHEETS_PER_CYCLE', 90, 1, 10000),
+    // Above ~16 concurrent reads Graph throttles this workbook rather than
+    // going faster, and the retry storm costs more than the parallelism saved.
+    readConcurrency: intEnv('SYNC_READ_CONCURRENCY', 8, 1, 16),
     stateConnectionString:
       env('AZURE_STORAGE_CONNECTION_STRING') ?? env('AzureWebJobsStorage'),
     stateContainer: env('SYNC_STATE_CONTAINER') ?? 'camp-sync-state',

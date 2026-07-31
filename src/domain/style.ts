@@ -1,14 +1,10 @@
 import {
-  BLANK_REQUIRED_FILL,
   LAYOUT,
-  REQUIRED_FIELDS,
-  RESOLVED_DROPDOWN_VALUE,
   STYLE,
   queueColumnsFor,
-  type QueueColumn,
   type WorkbookLayout,
 } from '../config';
-import { isBlank, offsetColumn, rangeAddress } from './cells';
+import { offsetColumn, rangeAddress } from './cells';
 import { lastQueueColumnLetter, type ParsedQueueSheet } from './queueSheets';
 
 /**
@@ -69,11 +65,6 @@ export interface StylePlan {
 export interface PlanQueueStyleInput {
   sheet: ParsedQueueSheet;
   layout?: WorkbookLayout;
-  /**
-   * Re-shade blank required fields. Off by default: the appender already shades
-   * a row as it writes it, and re-deriving it here would need the full grid.
-   */
-  shadeBlankRequired?: boolean;
 }
 
 export function planQueueStyle(input: PlanQueueStyleInput): StylePlan {
@@ -327,43 +318,6 @@ export function planDividerStyle(
       what: 'rule above the total',
       border: { edge: 'EdgeTop', style: 'Continuous', color: STYLE.headerFill, weight: 'Medium' },
     });
-  }
-
-  return operations;
-}
-
-/**
- * Which cells on an already-written row still need the red blank-required
- * shading, derived from the values on the sheet rather than from an intent.
- *
- * The appender shades as it writes. This exists for the tabs written before
- * `Resolved` and the date formats landed, and for a row a staff member has since
- * emptied.
- */
-export function planBlankRequiredShading(
-  sheet: ParsedQueueSheet,
-  layout: WorkbookLayout = LAYOUT,
-): StyleOperation[] {
-  const required = REQUIRED_FIELDS[sheet.sheet];
-  if (required.length === 0) return [];
-
-  const columns = queueColumnsFor(sheet.sheet);
-  const first = layout.queue.firstColumn;
-  const operations: StyleOperation[] = [];
-
-  for (const row of sheet.rows) {
-    for (const field of required) {
-      if (!isBlank(row.values[field])) continue;
-      const index = columns.indexOf(field as QueueColumn);
-      if (index === -1) continue;
-      const letter = offsetColumn(first, index);
-      operations.push({
-        kind: 'fill',
-        address: rangeAddress(letter, row.row, letter, row.row),
-        what: `blank required: ${field}`,
-        fill: BLANK_REQUIRED_FILL,
-      });
-    }
   }
 
   return operations;
