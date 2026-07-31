@@ -112,3 +112,66 @@ describe('GraphClient retries', () => {
     );
   });
 });
+
+describe('request timeout', () => {
+  // Observed on the live workbook: a write issued while two people were editing
+  // never returned. Not an error, not a lock — a hang, still hanging 31 minutes
+  // later. A failure retries; a hang stops the cycle dead and holds the worker.
+  it('gives up on a request that never responds', async () => {
+    const fetchImpl = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => {
+            const error = new Error('timed out');
+            error.name = 'TimeoutError';
+            reject(error);
+          });
+        }),
+    );
+
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+      timeoutMs: 20,
+      maxAttempts: 2,
+    });
+
+    await expect(client.request('/x')).rejects.toThrow(/timed out/);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a hang and succeeds on the next attempt', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      call++;
+      if (call === 1) {
+        return new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => {
+            const error = new Error('timed out');
+            error.name = 'TimeoutError';
+            reject(error);
+          });
+        });
+      }
+      return Promise.resolve(response(200, { ok: true }));
+    });
+
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+      timeoutMs: 20,
+    });
+
+    await expect(client.request('/x')).resolves.toEqual({ ok: true });
+  });
+
+  it('passes an abort signal on every request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(200, {}));
+    const client = new GraphClient(tokens, log, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+    });
+    await client.request('/x');
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeDefined();
+  });
+});

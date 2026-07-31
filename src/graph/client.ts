@@ -26,12 +26,16 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** Overrides the default retry budget for this call. */
   maxAttempts?: number;
+  /** Overrides the per-attempt timeout for this call. */
+  timeoutMs?: number;
 }
 
 export interface GraphClientOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Per-attempt ceiling. See TIMEOUT_MS. */
+  timeoutMs?: number;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
   fetchImpl?: typeof fetch;
@@ -45,6 +49,21 @@ export interface GraphClientOptions {
  * 429 and 503 carry Retry-After and must be honoured — Graph throttling on the
  * workbook endpoints is per-file and easy to hit at a 5-second cadence.
  */
+/**
+ * Per-attempt ceiling on a Graph call.
+ *
+ * Observed against the live workbook: a write issued while two people were
+ * editing simply never returned. Not an error, not a lock, not a throttle — the
+ * request hung, and was still hanging 31 minutes later.
+ *
+ * That is worse than a failure. A failure retries; a hang stops the cycle dead
+ * and holds the worker until the host kills it, which on a five-second timer
+ * means the sync silently stops running. 30s is far above the 95th percentile
+ * for these calls (a full 46-sheet scan takes under a second in-session), so a
+ * request past it is stuck rather than slow.
+ */
+const TIMEOUT_MS = 30_000;
+
 const RETRYABLE_STATUS = new Set([409, 423, 429, 500, 501, 502, 503, 504]);
 
 /**
@@ -62,6 +81,7 @@ export class GraphClient {
   private readonly maxDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(
     private readonly tokens: TokenProvider,
@@ -73,6 +93,7 @@ export class GraphClient {
     this.maxDelayMs = options.maxDelayMs ?? 8000;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
   }
 
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -97,11 +118,29 @@ export class GraphClient {
             ...options.headers,
           },
           ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+          // Without this a hung request never returns and the cycle stops
+          // forever. Observed on the live workbook.
+          signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
         });
       } catch (error) {
-        // Network-level failure. Retryable on the same budget.
-        if (attempt >= maxAttempts) throw error;
-        this.log.debug('graph.network_retry', { attempt, ...describeError(error) });
+        // Network failure or timeout. Both retryable on the same budget: a hung
+        // request is usually the workbook being momentarily unreachable, and
+        // the next attempt commonly succeeds.
+        const timedOut = (error as Error)?.name === 'TimeoutError';
+        if (attempt >= maxAttempts) {
+          this.log.error('graph.request_failed', {
+            action: method,
+            attempt,
+            reason: timedOut ? 'timeout' : 'network',
+            durationMs: Date.now() - startedAt,
+          });
+          throw error;
+        }
+        this.log.debug(timedOut ? 'graph.timeout_retry' : 'graph.network_retry', {
+          attempt,
+          durationMs: Date.now() - startedAt,
+          ...describeError(error),
+        });
         await this.sleep(this.backoffMs(attempt));
         continue;
       }
