@@ -302,3 +302,28 @@ describe('the SyncID column still clears the data', () => {
     ).toThrow(/overlaps the data columns/);
   });
 });
+
+describe('a date that is not a day on the calendar', () => {
+  it('is left exactly as staff typed it', () => {
+    // `14/24/2014` is a typo — there is no fourteenth month. JavaScript's Date
+    // rolls it forward to 24 February 2015 without a word, so converting the
+    // daily sheets' text dates to real dates turned a mistake somebody could
+    // spot into a plausible, wrong, unremarkable date of birth. It reached the
+    // live workbook once, on `Not Accepted ` row 377.
+    expect(toExcelSerial('14/24/2014')).toBeUndefined();
+    expect(toDateCellValue('14/24/2014')).toBe('14/24/2014');
+
+    expect(toExcelSerial('13/01/2020')).toBeUndefined();
+    expect(toExcelSerial('02/30/2019')).toBeUndefined();
+  });
+
+  it('still accepts the awkward dates that are real', () => {
+    expect(toExcelSerial('02/29/2020')).toBe(43890); // a leap day
+    expect(toExcelSerial('12/31/1999')).toBeDefined();
+  });
+
+  it('does not treat two different bad dates as the same patient', () => {
+    // Both roll to a real date under the old behaviour, and could have collided.
+    expect(sameDay('14/24/2014', '02/24/2015')).toBe(false);
+  });
+});

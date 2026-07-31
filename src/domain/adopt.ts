@@ -130,17 +130,43 @@ export function toDateKey(value: unknown): string | undefined {
   if (!text) return undefined;
 
   const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
-  if (iso) return `${iso[1]}-${pad(iso[2]!)}-${pad(iso[3]!)}`;
+  if (iso) return calendarKey(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
   // US order, which is what the daily sheets use.
   const us = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(text);
   if (us) {
     const year = Number(us[3]);
     const full = year < 100 ? (year > 30 ? 1900 + year : 2000 + year) : year;
-    return `${full}-${pad(us[1]!)}-${pad(us[2]!)}`;
+    return calendarKey(full, Number(us[1]), Number(us[2]));
   }
 
   return undefined;
+}
+
+/**
+ * A date key, or nothing if those numbers are not a day on the calendar.
+ *
+ * The validation is the point. `14/24/2014` is a typo somebody made — there is
+ * no fourteenth month — and JavaScript's Date rolls it forward to 24 February
+ * 2015 without a word. Left unchecked, converting the daily sheets' text dates
+ * to real dates turned that typo into a plausible, wrong, unremarkable date of
+ * birth: the kind of error nobody spots again, on the record used for billing.
+ *
+ * Live example: `Not Accepted ` row 377, whose source cell on `July 16, 2026`
+ * reads `14/24/2014`.
+ *
+ * Returning undefined leaves the original text exactly as staff typed it, so
+ * the mistake stays visible and fixable.
+ */
+function calendarKey(year: number, month: number, day: number): string | undefined {
+  if (!Number.isInteger(year) || year < 1900 || year > 2200) return undefined;
+  if (!Number.isInteger(month) || month < 1 || month > 12) return undefined;
+  if (!Number.isInteger(day) || day < 1) return undefined;
+
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day > daysInMonth) return undefined;
+
+  return `${year}-${pad(String(month))}-${pad(String(day))}`;
 }
 
 function pad(part: string): string {
