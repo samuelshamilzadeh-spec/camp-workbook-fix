@@ -364,7 +364,8 @@ describe('reconcile', () => {
     expect(removals).toHaveLength(1);
     expect(removals[0]).toMatchObject({
       queueSheet: 'Missing Info',
-      reason: 'no-longer-queued-at-source',
+      // Still queued, just on the wrong tab — distinct from being finished.
+      reason: 'wrong-queue',
     });
   });
 
@@ -526,5 +527,55 @@ describe('reconcile', () => {
       });
 
     expect(JSON.stringify(build())).toBe(JSON.stringify(build()));
+  });
+});
+
+describe('wrong queue versus finished', () => {
+  const daily = (status: string) =>
+    parseDailySheet(
+      '2026-07-30',
+      dailyRange('2026-07-30', [
+        { status, last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
+      ]),
+    );
+
+  const onMissingInfo = () =>
+    parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [
+        { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
+      ]),
+    );
+
+  it('calls it wrong-queue and appends elsewhere when the patient is still queued', () => {
+    // `no insurance` routes to Not Accepted. Nine live rows were in this state.
+    const plan = reconcile({
+      daily: [daily('no insurance')],
+      queues: [onMissingInfo()],
+      newSyncId: sequentialIds(),
+    });
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({ queueSheet: 'Missing Info', reason: 'wrong-queue' });
+
+    // And the replacement row is planned in the same breath. An applier that
+    // honours the removal without the append leaves the patient on no queue.
+    const appends = plan.intents.filter((i) => i.kind === 'append-queue-row');
+    expect(appends).toHaveLength(1);
+    expect(appends[0]).toMatchObject({ destination: 'Not Accepted', syncId: 'S000000000001' });
+  });
+
+  it('calls it no-longer-queued when the source went terminal, with no append', () => {
+    const plan = reconcile({
+      daily: [daily('lasante-e')],
+      queues: [onMissingInfo()],
+      newSyncId: sequentialIds(),
+    });
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({ reason: 'no-longer-queued-at-source' });
+    expect(plan.counts['append-queue-row']).toBe(0);
   });
 });

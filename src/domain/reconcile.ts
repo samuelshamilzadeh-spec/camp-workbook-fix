@@ -65,6 +65,9 @@ export interface RemoveQueueRowIntent {
   reason:
     | 'resolved-on-queue'
     | 'cleared-on-queue'
+    /** Still queued, but belongs on a different tab. An append accompanies this. */
+    | 'wrong-queue'
+    /** Not queued anywhere any more: column B went terminal or was cleared. */
     | 'no-longer-queued-at-source'
     | 'source-row-missing';
 }
@@ -208,7 +211,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   for (const [syncId, dailyRow] of dailyById) {
     const queueRows = queueById.get(syncId) ?? [];
 
-    const removeStale = (row: QueueRow): void => {
+    const removeStale = (row: QueueRow, reason: 'wrong-queue' | 'no-longer-queued-at-source'): void => {
       intents.push({
         kind: 'remove-queue-row',
         syncId,
@@ -216,7 +219,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
         queueRow: row.row,
         sourceSheet: undefined,
         sourceRow: undefined,
-        reason: 'no-longer-queued-at-source',
+        reason,
       });
     };
 
@@ -226,8 +229,16 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
 
       // Any row on a queue this patient no longer belongs to goes, whether or
       // not they also have a row on the right one.
+      //
+      // `wrong-queue`, not `no-longer-queued-at-source`: this patient is still
+      // queued, just somewhere else, and an append to the right tab is emitted
+      // below when they have no row there. The two are separated because an
+      // applier must not delete this row until that append has landed — deleting
+      // both sides of a move leaves the patient on no queue at all. Nine rows on
+      // Missing Info were in exactly this state, their column B reading
+      // `no insurance` and `incorrect insurance`, which route elsewhere.
       for (const row of queueRows) {
-        if (row.sheet !== destination) removeStale(row);
+        if (row.sheet !== destination) removeStale(row, 'wrong-queue');
       }
 
       if (onDestination.length === 0) {
@@ -311,8 +322,9 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     }
 
     // Terminal (ohi / lasante) or the keyword was removed at the source: the row
-    // belongs on no queue at all, so every copy of it goes.
-    for (const row of queueRows) removeStale(row);
+    // belongs on no queue at all, so every copy of it goes. Nothing is written
+    // back and nothing is cleared — the daily sheet is already the truth.
+    for (const row of queueRows) removeStale(row, 'no-longer-queued-at-source');
   }
 
   // --- 3. Queue rows with no live source ------------------------------------

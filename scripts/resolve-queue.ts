@@ -1,12 +1,14 @@
 /**
- * Phases 3 and 4, driven by the `Resolved` marker.
+ * Phases 3 and 4 — taking rows off a queue.
  *
  *   npm run resolve-rows                     # dry run, every queue
  *   npm run resolve-rows -- "Missing Info"   # dry run, one queue
  *   npm run resolve-rows -- --apply
  *
- * When a staff member fills in what was missing on a queue row and marks it
- * Done, three things have to happen and the order is not negotiable:
+ * Two things put a row on the removal list, and they are not the same job.
+ *
+ * **A staff member marked it Done.** They filled in what was missing, so three
+ * things have to happen and the order is not negotiable:
  *
  *   1. **Write the fix back to the daily sheet.** Until this runs, the queue row
  *      is the ONLY place that phone number exists. Deleting first would destroy
@@ -18,9 +20,30 @@
  *   3. **Delete the queue row.** Whole-row, bottom-up per sheet, so deleting one
  *      row cannot move another row out from under a later delete.
  *
- * Nothing here acts on inference. A row is only touched when a human put one of
- * the accepted words in the Resolved column; anything else in that cell is
- * reported and left exactly as it is.
+ * **The source says they are finished.** Column B on the daily sheet went
+ * terminal or was cleared there, so the daily sheet is already right, there is
+ * nothing to write back and nothing to clear — the queue row is just out of
+ * date. It is deleted. Without this the queues only ever grow.
+ *
+ * **The patient moved queue.** Their column B still flags them, but for a
+ * different tab — nine live rows sat on Missing Info reading `no insurance` and
+ * `incorrect insurance`, which route to Not Accepted and to Ineligible &
+ * Inactive. The old copy is deleted ONLY once the new one exists. The
+ * reconciler emits the append in the same plan and this script does not apply
+ * appends, so a row whose replacement is still pending is skipped and picked up
+ * on the next run. Delete both sides of a move and the patient is on no queue at
+ * all.
+ *
+ * A third reason, `cleared-on-queue`, is reported and NEVER applied. It fires
+ * when every patient field on a queue row is blank, which was the conservative
+ * reading of "staff clear the row to signal removal" back when there was no
+ * column to say so. The `Resolved` column says it explicitly now, and a row
+ * that is blank because somebody is midway through retyping it looks exactly
+ * like one they meant to delete.
+ *
+ * Nothing here acts on inference about a patient. A row is removed because a
+ * human marked it, or because the daily sheet — the record of what actually
+ * happened — no longer flags them.
  */
 
 import {
@@ -89,18 +112,49 @@ async function main(): Promise<void> {
 
     const plan = reconcile({ daily, queues, newSyncId });
 
-    // Only rows a human marked. `no-longer-queued-at-source` and
-    // `cleared-on-queue` removals are a different decision and are not applied
-    // here — this script exists to honour an explicit signal, nothing else.
-    const resolved = plan.intents.filter(
+    const removals = plan.intents.filter(
       (intent): intent is RemoveQueueRowIntent =>
-        intent.kind === 'remove-queue-row' &&
-        intent.reason === 'resolved-on-queue' &&
-        (!only || intent.queueSheet === only),
+        intent.kind === 'remove-queue-row' && (!only || intent.queueSheet === only),
     );
+
+    // A human marked it Done: write their fix back, clear the status at source,
+    // delete the row.
+    const resolved = removals.filter((intent) => intent.reason === 'resolved-on-queue');
+
+    // The source says they are finished — column B went terminal or was cleared
+    // there. Nothing to write back and nothing to clear; the daily sheet is
+    // already right and the queue row is simply out of date. Without this the
+    // queues only ever grow.
+    const finished = removals.filter((intent) => intent.reason === 'no-longer-queued-at-source');
+
+    // Still queued, on the wrong tab. Deleting one of these is only safe once
+    // the replacement row exists on the correct tab — and the reconciler emits
+    // that append in the SAME plan, which this script does not apply. So a row
+    // whose replacement is still pending is skipped and picked up next run,
+    // after `npm run append` has put it where it belongs. Delete both sides of
+    // a move and the patient is on no queue at all.
+    const pendingAppend = new Set(
+      plan.intents.filter((i) => i.kind === 'append-queue-row').map((i) => i.syncId),
+    );
+    const movedAlready = removals.filter(
+      (intent) => intent.reason === 'wrong-queue' && !pendingAppend.has(intent.syncId ?? ''),
+    );
+    const movePending = removals.filter(
+      (intent) => intent.reason === 'wrong-queue' && pendingAppend.has(intent.syncId ?? ''),
+    );
+
+    // Deliberately NEVER applied. This fires when every patient field on a queue
+    // row is blank, which the README calls the conservative reading of "staff
+    // clear the row to signal removal". The `Resolved` column now says that
+    // explicitly, so this heuristic is superseded — and a row that is blank
+    // because somebody is midway through retyping it is indistinguishable from
+    // one they meant to delete. Reported, never acted on.
+    const clearedHeuristic = removals.filter((intent) => intent.reason === 'cleared-on-queue');
+
     const resolvedRows = new Set(resolved.map((intent) => `${intent.queueSheet}!${intent.queueRow}`));
 
-    // Write-backs belonging to those rows, and only those.
+    // Write-backs belonging to the marked rows, and only those. A field that
+    // differs on a row nobody marked is not this script's business.
     const writeBacks = plan.intents.filter(
       (intent): intent is WriteBackIntent =>
         intent.kind === 'write-back' &&
@@ -109,20 +163,32 @@ async function main(): Promise<void> {
 
     // --- report -------------------------------------------------------------
     out();
-    out(`queues:           ${only ?? 'all five'}`);
-    out(`rows marked done: ${resolved.length}`);
+    out(`queues:               ${only ?? 'all five'}`);
+    out(`marked Done by staff: ${resolved.length}   (write back, clear column B, delete)`);
+    out(`finished at source:   ${finished.length}   (delete only)`);
+    out(`moved queue, replaced:${String(movedAlready.length).padStart(4)}   (delete the old copy)`);
+    out(`moved, not yet placed:${String(movePending.length).padStart(4)}   (SKIPPED — run append first)`);
+    out(`blank-row heuristic:  ${clearedHeuristic.length}   (reported, never applied)`);
     out(`fields to write back: ${writeBacks.length}`);
-    out(`statuses to clear:    ${new Set(resolved.map((r) => `${r.sourceSheet}!${r.sourceRow}`)).size}`);
     out(`unrecognized markers: ${plan.unrecognizedResolved.length}`);
 
-    if (resolved.length > 0) {
+    const actionable = [...resolved, ...finished, ...movedAlready];
+
+    if (actionable.length > 0) {
       out();
-      out('rows to remove, by queue:');
-      const byQueue = new Map<string, number>();
-      for (const intent of resolved) {
-        byQueue.set(intent.queueSheet, (byQueue.get(intent.queueSheet) ?? 0) + 1);
+      out('rows to remove:');
+      const byQueue = new Map<string, { done: number; finished: number; moved: number }>();
+      const bump = (q: string, k: 'done' | 'finished' | 'moved') => {
+        const e = byQueue.get(q) ?? { done: 0, finished: 0, moved: 0 };
+        e[k]++;
+        byQueue.set(q, e);
+      };
+      for (const i of resolved) bump(i.queueSheet, 'done');
+      for (const i of finished) bump(i.queueSheet, 'finished');
+      for (const i of movedAlready) bump(i.queueSheet, 'moved');
+      for (const [queue, e] of byQueue) {
+        out(`  ${queue.padEnd(24)} ${e.done} done, ${e.finished} finished, ${e.moved} moved`);
       }
-      for (const [queue, count] of byQueue) out(`  ${queue.padEnd(24)} ${count}`);
     }
 
     for (const report of plan.unrecognizedResolved) {
@@ -131,10 +197,13 @@ async function main(): Promise<void> {
           '— not an accepted marker, left alone',
       );
     }
+    for (const intent of clearedHeuristic) {
+      out(`  ${intent.queueSheet} row ${intent.queueRow}: every field blank — NOT removed`);
+    }
     out();
 
-    if (resolved.length === 0) {
-      out('Nothing marked done. Nothing to do.');
+    if (actionable.length === 0) {
+      out('Nothing to remove.');
       return;
     }
 
@@ -143,7 +212,9 @@ async function main(): Promise<void> {
       return;
     }
 
-    log.warn('resolve.apply_mode', { count: resolved.length });
+    log.warn('resolve.apply_mode', {
+      counts: { resolved: resolved.length, finished: finished.length, moved: movedAlready.length },
+    });
 
     // --- 1. the fixes go home ------------------------------------------------
     //
@@ -181,8 +252,13 @@ async function main(): Promise<void> {
     //
     // Bottom-up within each tab. Deleting row 40 moves row 41 up to 40, so a
     // top-down pass would delete the wrong patient from the second row onwards.
+    //
+    // Both kinds are merged into ONE pass before sorting. Deleting the marked
+    // rows first and the stale rows afterwards would leave the second set
+    // holding row numbers from before the first set moved everything up — the
+    // same failure, arrived at by being tidy.
     const byTab = new Map<string, number[]>();
-    for (const intent of resolved) {
+    for (const intent of actionable) {
       const tab = tabFor.get(intent.queueSheet);
       if (!tab) continue;
       const rows = byTab.get(tab) ?? [];
@@ -200,8 +276,15 @@ async function main(): Promise<void> {
     out(`deleted ${deleted} queue rows`);
 
     log.info('resolve.complete', {
-      count: resolved.length,
-      counts: { writeBacks: writeBacks.length, cleared, deleted },
+      count: actionable.length,
+      counts: {
+        resolved: resolved.length,
+        finished: finished.length,
+        moved: movedAlready.length,
+        writeBacks: writeBacks.length,
+        cleared,
+        deleted,
+      },
     });
 
     out();
