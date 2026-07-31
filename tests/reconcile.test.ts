@@ -317,6 +317,111 @@ describe('reconcile', () => {
     });
   });
 
+  it('does not re-append a patient who is already on the right queue and stale on another', () => {
+    // A patient whose column B changed sits on two queue tabs until Phase 4
+    // clears the old one. Indexed by SyncID alone, whichever tab parsed last
+    // won — so the stale row could hide the correct one, and every run planned
+    // another append to a queue the patient was already on. That is a duplicate
+    // per run, found by re-running the appender against a tab it had just
+    // written to the live workbook.
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'verify insurance', camp: 'Achim', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Verify Insurance',
+          queueRange('Verify Insurance', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+        // Parsed after, and under the old rule this one overwrote the row above.
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['append-queue-row']).toBe(0);
+
+    const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({
+      queueSheet: 'Missing Info',
+      reason: 'no-longer-queued-at-source',
+    });
+  });
+
+  it('reports a second row on the same queue rather than picking one to delete', () => {
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'missing info', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+            { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['append-queue-row']).toBe(0);
+    expect(plan.counts['remove-queue-row']).toBe(0);
+    expect(plan.orphans).toEqual([
+      {
+        queueSheet: 'Missing Info',
+        queueRow: LAYOUT.queue.firstDataRow + 1,
+        syncId: 'S000000000001',
+        reason: 'duplicate-sync-id',
+      },
+    ]);
+  });
+
+  it('removes every copy when the source is no longer queued at all', () => {
+    const plan = reconcile({
+      daily: [
+        parseDailySheet(
+          '2026-07-30',
+          dailyRange('2026-07-30', [
+            { status: 'lasante-e', last: 'A', first: 'B', syncId: 'S000000000001' },
+          ]),
+        ),
+      ],
+      queues: [
+        parseQueueSheet(
+          'Verify Insurance',
+          queueRange('Verify Insurance', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
+        ),
+        parseQueueSheet(
+          'Missing Info',
+          queueRange('Missing Info', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
+        ),
+      ],
+      newSyncId: sequentialIds(),
+    });
+
+    expect(plan.counts['remove-queue-row']).toBe(2);
+    expect(plan.counts['append-queue-row']).toBe(0);
+  });
+
   it('does not treat a row with one blank required field as cleared', () => {
     // A Missing Info row is missing something by definition. Deleting it would
     // drop exactly the patients this system exists to chase.

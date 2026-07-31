@@ -46,6 +46,23 @@ along.
 A tab rename is a silent outage in this design. Worth knowing before the office
 plans one.
 
+**The reconciler would have duplicated a patient on every run.** `queueById` was
+keyed by SyncID alone, one row per ID. A patient whose column B changed sits on
+two queue tabs for a while — the new one, and the old one waiting for Phase 4 to
+remove it — so the second tab parsed overwrote the first, and which survived
+depended on the order of `QUEUE_SHEET_NAMES`. When the survivor was the stale
+row, the reconciler concluded "wrong queue" and planned an append to the queue
+the patient was **already on**. Every run would have added another copy.
+
+Caught by re-running the appender against Verify Insurance immediately after
+writing it: 243 rows written, and it still wanted to append one of them. The
+index now holds every row an ID appears on; a patient already on the right queue
+is never appended, stale rows on other queues are removed, and a genuine
+duplicate on one queue is reported rather than guessed at.
+
+Nothing was duplicated on the workbook — the second run was a dry run, which is
+the entire reason for checking idempotency before trusting a write path.
+
 ## What it does
 
 `npm run append -- "<queue>"` appends every patient the reconciler says belongs
@@ -74,21 +91,24 @@ Measured after the United Refuah run, with both defects above corrected:
 
 | Queue | Rows to append | Tab state | Inserts needed |
 |---|---|---|---|
-| `Verify Insurance` | 243 | empty, header only | no |
-| `Not Accepted ` | 17 | 400 live rows | yes |
-| `Ineligible & Inactive` | 11 | 1,221 live rows | yes |
-| `Missing Info` | 8 | 229 live rows | yes |
-| `United Refuah` | 0 | **done** | — |
+| `United Refuah` | 0 | **done** — 85 rows, 13 camps | — |
+| `Verify Insurance` | 0 | **done** — 243 rows, 17 camps | — |
+| `Not Accepted ` | 11 | 400 live rows | yes |
+| `Ineligible & Inactive` | 5 | 1,221 live rows | yes |
+| `Missing Info` | 1 | 229 live rows | yes |
 
-`Verify Insurance` has the same safety profile as United Refuah — empty tab, so
-every row lands past the end and no gap is opened. The other three need
-`--allow-inserts`, which is the first time this project shifts a live row.
+The two done tabs were empty, so every row landed past the end and no gap was
+opened. The remaining 17 rows all need `--allow-inserts`, which will be the
+first time this project shifts a live row — and the first live exercise of the
+dark red shading, since 11 of them have a blank required field.
 
-**21 queue rows carry no SyncID**, 18 of them the rows 3-9 that were invisible
-until today. `npm run adopt:apply` matches 19 of the 20 candidates and would
-stamp 38 IDs across 17 range writes; one is an `identity-mismatch` that needs a
-human. Until they are linked, a staff edit on those rows cannot reach the daily
-sheet — so adoption should run before those three tabs are appended to.
+Adoption has been re-run: **19 of the 20 unlinked rows are now stamped**, 38 IDs
+across 17 range writes. Two orphans remain and both need a human — one
+`identity-mismatch`, one `unknown-sync-id`.
+
+Also outstanding, computed but not applied: **9 `remove-queue-row` intents**,
+patients whose column B was resolved at source and who should come off their
+queue. That is Phase 4, which does not exist.
 
 ## Run United Refuah first
 

@@ -36,24 +36,30 @@ shading on blank required fields, and whole-row inserts. Dry run by default, one
 queue per run, and it refuses to open gaps in a live sheet without
 `--allow-inserts`.
 
-**`United Refuah` is written: 85 patients, 13 camp blocks, 0 row inserts.** A
-second run plans nothing. Remaining: `Verify Insurance` (243, empty tab, no
-inserts), then `Not Accepted ` (17), `Ineligible & Inactive` (11) and
-`Missing Info` (8), which all need `--allow-inserts`.
+**`United Refuah` (85 patients, 13 camps) and `Verify Insurance` (243 patients,
+17 camps) are written.** Both were empty tabs, so neither needed a row insert,
+and both now plan nothing on a re-run. Remaining: `Not Accepted ` (11),
+`Ineligible & Inactive` (5) and `Missing Info` (1) — 17 rows that all need
+`--allow-inserts`, the first time this project shifts a live row.
 See [`docs/phase2b.md`](phase2b.md).
 
-### Two live defects the first run exposed — both fixed in config
+### Three live defects the first runs exposed — all fixed
 - **The queue header row is row 1, not row 9.** The brief's instruction-block
   layout does not exist. Reading from row 10 hid rows 2-9 of every mirror tab —
   18 patient rows invisible to Phase 1 and missed by Phase 2a. That is where
   "679 of 681" came from.
 - **`Missing Info (New)` was renamed `Missing Info`.** The tab stopped
   resolving, and 194 patients were being routed to a queue with no sheet. Only a
-  `queue.sheet_missing` warning marked it.
+  `queue.sheet_missing` warning marked it. A tab rename is a silent outage here.
+- **The reconciler would have duplicated a patient on every run.** `queueById`
+  held one row per SyncID, so a patient sitting on two queue tabs — the right one
+  and a stale one awaiting Phase 4 — collapsed to whichever tab parsed last. When
+  that was the stale row, it planned an append to the queue the patient was
+  already on. Caught by re-running the appender against a tab just written; the
+  index now keeps every row an ID appears on.
 
-**21 queue rows still carry no SyncID.** `npm run adopt:apply` links 19 of the
-20 candidates; 1 is an `identity-mismatch` needing a human. Run it before
-appending to the three populated tabs.
+**Adoption re-run: 19 of 20 unlinked rows stamped.** Two orphans remain, both
+needing a human — one `identity-mismatch`, one `unknown-sync-id`.
 
 ### Phase 3 — write-back to the daily sheets
 Intents are computed; no applier. The patient fan-out logic

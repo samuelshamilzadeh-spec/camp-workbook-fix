@@ -82,7 +82,7 @@ export interface OrphanReport {
   queueSheet: QueueSheetName;
   queueRow: number;
   syncId: string | undefined;
-  reason: 'unknown-sync-id' | 'missing-sync-id';
+  reason: 'unknown-sync-id' | 'missing-sync-id' | 'duplicate-sync-id';
 }
 
 export interface ReconcilePlan {
@@ -148,7 +148,21 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   }
 
   // --- Index the queue side --------------------------------------------------
-  const queueById = new Map<string, QueueRow>();
+  //
+  // EVERY row an ID appears on, not just the last one seen.
+  //
+  // A patient legitimately sits on two queue tabs for a while: their column B
+  // changed, so they belong on the new queue and their old row is waiting for
+  // Phase 4 to remove it. Keyed by ID alone, the second tab parsed overwrote the
+  // first, and which one survived depended on the order of QUEUE_SHEET_NAMES.
+  //
+  // That is not a cosmetic problem. If the surviving row was the stale one, the
+  // reconciler concluded "wrong queue" and planned an append to the correct
+  // queue — where the row already was. Every run planned it again, so every run
+  // added another copy of that patient. Caught on the live workbook by
+  // re-running the appender against a tab it had just written: 243 rows written,
+  // and it still wanted to append one of them.
+  const queueById = new Map<string, QueueRow[]>();
   for (const queue of input.queues) {
     for (const row of queue.rows) {
       if (!row.syncId) {
@@ -160,7 +174,9 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
         });
         continue;
       }
-      queueById.set(row.syncId, row);
+      const rows = queueById.get(row.syncId) ?? [];
+      rows.push(row);
+      queueById.set(row.syncId, rows);
     }
   }
 
@@ -174,41 +190,60 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
 
   // --- 2. Already-stamped source rows ---------------------------------------
   for (const [syncId, dailyRow] of dailyById) {
-    const queueRow = queueById.get(syncId);
+    const queueRows = queueById.get(syncId) ?? [];
+
+    const removeStale = (row: QueueRow): void => {
+      intents.push({
+        kind: 'remove-queue-row',
+        syncId,
+        queueSheet: row.sheet,
+        queueRow: row.row,
+        sourceSheet: undefined,
+        sourceRow: undefined,
+        reason: 'no-longer-queued-at-source',
+      });
+    };
 
     if (dailyRow.outcome.kind === 'queued') {
-      if (!queueRow) {
-        // Stamped but absent from its queue: append. Covers a row whose keyword
-        // changed to a different destination as well, because the stale row is
-        // removed by the pass below.
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination));
+      const destination = dailyRow.outcome.destination;
+      const onDestination = queueRows.filter((row) => row.sheet === destination);
+
+      // Any row on a queue this patient no longer belongs to goes, whether or
+      // not they also have a row on the right one.
+      for (const row of queueRows) {
+        if (row.sheet !== destination) removeStale(row);
+      }
+
+      if (onDestination.length === 0) {
+        // Not on the queue they belong to: append. Covers both the never-queued
+        // case and the moved-queue case, and the stale row was just removed.
+        intents.push(buildAppend(dailyRow, syncId, destination));
         continue;
       }
 
-      if (queueRow.sheet !== dailyRow.outcome.destination) {
-        // Wrong queue. Remove here, append there — the append was emitted above
-        // only when the row was missing entirely, so emit it now.
-        intents.push({
-          kind: 'remove-queue-row',
-          syncId,
-          queueSheet: queueRow.sheet,
-          queueRow: queueRow.row,
-          sourceSheet: undefined,
-          sourceRow: undefined,
-          reason: 'no-longer-queued-at-source',
-        });
-        intents.push(buildAppend(dailyRow, syncId, dailyRow.outcome.destination));
-        continue;
+      if (onDestination.length > 1) {
+        // Two rows on one queue for one visit. Nothing here picks which to keep
+        // — the first is reconciled and the rest are reported, because deleting
+        // a row a human may have been editing is not a guess worth making.
+        for (const row of onDestination.slice(1)) {
+          orphans.push({
+            queueSheet: row.sheet,
+            queueRow: row.row,
+            syncId,
+            reason: 'duplicate-sync-id',
+          });
+        }
       }
 
       // An append-only destination is a record, not a work queue: the office
       // confirmed a United Refuah row is copied across and then never changes,
       // and nothing is ever sent back to the daily sheet.
-      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+      if (APPEND_ONLY_DESTINATIONS.includes(destination)) continue;
 
       // Same queue: reconcile field values. A staff edit on the queue sheet is
       // authoritative and gets copied back to the daily sheet. Notes and the
       // Source Row link stay put.
+      const queueRow = onDestination[0]!;
       for (const [column, queueValue] of Object.entries(queueRow.values)) {
         const field = column as QueueColumn;
         if (QUEUE_ONLY_COLUMNS.includes(field)) continue;
@@ -230,22 +265,12 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     }
 
     // Terminal (ohi / lasante) or the keyword was removed at the source: the row
-    // does not belong on any queue.
-    if (queueRow) {
-      intents.push({
-        kind: 'remove-queue-row',
-        syncId,
-        queueSheet: queueRow.sheet,
-        queueRow: queueRow.row,
-        sourceSheet: undefined,
-        sourceRow: undefined,
-        reason: 'no-longer-queued-at-source',
-      });
-    }
+    // belongs on no queue at all, so every copy of it goes.
+    for (const row of queueRows) removeStale(row);
   }
 
   // --- 3. Queue rows with no live source ------------------------------------
-  for (const [syncId, queueRow] of queueById) {
+  for (const [syncId, queueRows] of queueById) {
     const dailyRow = dailyById.get(syncId);
 
     if (!dailyRow) {
@@ -255,12 +280,14 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       // here, so this is reported and never acted on. `selectSheetsToScan`
       // pulls in every sheet referenced by a queue row precisely so that a
       // genuine orphan is rare.
-      orphans.push({
-        queueSheet: queueRow.sheet,
-        queueRow: queueRow.row,
-        syncId,
-        reason: 'unknown-sync-id',
-      });
+      for (const queueRow of queueRows) {
+        orphans.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          reason: 'unknown-sync-id',
+        });
+      }
       continue;
     }
 
@@ -273,9 +300,10 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     // column at all. Until that is settled this uses the conservative reading —
     // the whole row blanked — because it cannot misfire, whereas keying deletion
     // off a single column would delete rows on a stray backspace.
-    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+    for (const queueRow of queueRows) {
+      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+      if (!rowLooksCleared(queueRow)) continue;
 
-    if (rowLooksCleared(queueRow)) {
       intents.push({
         kind: 'remove-queue-row',
         syncId,
