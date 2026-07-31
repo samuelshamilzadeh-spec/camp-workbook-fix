@@ -100,6 +100,57 @@ The `grantGraphToAppRegistration` output is only for the CLI scripts, which
 authenticate with the client secret. If `npm run reconcile` already works, that
 grant exists and you do not need it.
 
+## Deploying the code
+
+**Do not use `az functionapp deployment source config-zip` here.** It reports
+success, sets `WEBSITE_RUN_FROM_PACKAGE=1`, and leaves you with a Function App
+that lists zero functions. Linux Consumption does not support the `1` form of
+that setting — it only accepts a URL — so the host mounts no content and finds
+nothing to run. Every other diagnostic looks healthy: the zip is correct, the
+app settings are correct, the deployment succeeded.
+
+Use Core Tools, which handles this correctly and is present in Cloud Shell:
+
+```bash
+npm ci && npm run build
+func azure functionapp publish "$APP"
+```
+
+If `func` is unavailable, do what it does — put the package in blob storage and
+point the setting at it:
+
+```bash
+STORAGE=$(az functionapp config appsettings list -g "$RG" -n "$APP" \
+  --query "[?name=='WEBSITE_CONTENTSHARE']" -o tsv >/dev/null; \
+  az storage account list -g "$RG" --query "[0].name" -o tsv)
+KEY=$(az storage account keys list -g "$RG" -n "$STORAGE" --query "[0].value" -o tsv)
+
+npm ci && npm run build && npm prune --omit=dev
+rm -f ../app.zip && zip -rq ../app.zip dist node_modules host.json package.json && npm ci
+
+az storage container create --account-name "$STORAGE" --account-key "$KEY" --name deployments
+az storage blob upload --account-name "$STORAGE" --account-key "$KEY" \
+  --container-name deployments --name app.zip --file ../app.zip --overwrite
+
+EXPIRY=$(date -u -d '+2 years' '+%Y-%m-%dT%H:%MZ')
+SAS=$(az storage blob generate-sas --account-name "$STORAGE" --account-key "$KEY" \
+  --container-name deployments --name app.zip --permissions r --expiry "$EXPIRY" -o tsv)
+
+az functionapp config appsettings set -g "$RG" -n "$APP" \
+  --settings WEBSITE_RUN_FROM_PACKAGE="https://$STORAGE.blob.core.windows.net/deployments/app.zip?$SAS"
+az functionapp restart -g "$RG" -n "$APP"
+```
+
+The SAS expiry is a real deadline: when it passes the app stops being able to
+read its own code. Core Tools manages this for you, which is the better reason
+to prefer it.
+
+Either way, confirm before moving on:
+
+```bash
+sleep 30 && az functionapp function list -g "$RG" -n "$APP" -o table
+```
+
 ## Then, and not before
 
 The template deploys with `syncPhase=1`, `syncDryRun=true` and
