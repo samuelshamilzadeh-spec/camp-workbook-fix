@@ -1,0 +1,300 @@
+{
+  "summary": {
+    "sheet": "United Refuah (old)",
+    "cell": "BZ1",
+    "iterations": 40,
+    "intervalMs": 250,
+    "succeeded": 40,
+    "failed": 0,
+    "lockedOrConflict": 0,
+    "throttled": 0,
+    "readBackMismatches": 39,
+    "latencyMs": {
+      "p50": 2604,
+      "p95": 5408,
+      "max": 10042
+    }
+  },
+  "attempts": [
+    {
+      "iteration": 1,
+      "startedAt": "2026-07-31T08:15:47.942Z",
+      "durationMs": 3475,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 2,
+      "startedAt": "2026-07-31T08:15:51.668Z",
+      "durationMs": 3564,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 3,
+      "startedAt": "2026-07-31T08:15:55.483Z",
+      "durationMs": 2848,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 4,
+      "startedAt": "2026-07-31T08:15:58.580Z",
+      "durationMs": 1845,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 5,
+      "startedAt": "2026-07-31T08:16:00.676Z",
+      "durationMs": 1497,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 6,
+      "startedAt": "2026-07-31T08:16:02.424Z",
+      "durationMs": 1806,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 7,
+      "startedAt": "2026-07-31T08:16:04.481Z",
+      "durationMs": 2006,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 8,
+      "startedAt": "2026-07-31T08:16:06.736Z",
+      "durationMs": 2120,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 9,
+      "startedAt": "2026-07-31T08:16:09.107Z",
+      "durationMs": 1678,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 10,
+      "startedAt": "2026-07-31T08:16:11.036Z",
+      "durationMs": 3555,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 11,
+      "startedAt": "2026-07-31T08:16:14.842Z",
+      "durationMs": 2450,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 12,
+      "startedAt": "2026-07-31T08:16:17.543Z",
+      "durationMs": 1552,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 13,
+      "startedAt": "2026-07-31T08:16:19.346Z",
+      "durationMs": 3734,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 14,
+      "startedAt": "2026-07-31T08:16:23.329Z",
+      "durationMs": 3999,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 15,
+      "startedAt": "2026-07-31T08:16:27.579Z",
+      "durationMs": 4240,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 16,
+      "startedAt": "2026-07-31T08:16:32.069Z",
+      "durationMs": 2824,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 17,
+      "startedAt": "2026-07-31T08:16:35.144Z",
+      "durationMs": 3968,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 18,
+      "startedAt": "2026-07-31T08:16:39.362Z",
+      "durationMs": 5408,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 19,
+      "startedAt": "2026-07-31T08:16:45.020Z",
+      "durationMs": 1534,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 20,
+      "startedAt": "2026-07-31T08:16:46.803Z",
+      "durationMs": 4876,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 21,
+      "startedAt": "2026-07-31T08:16:51.930Z",
+      "durationMs": 2054,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 22,
+      "startedAt": "2026-07-31T08:16:54.235Z",
+      "durationMs": 1603,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 23,
+      "startedAt": "2026-07-31T08:16:56.088Z",
+      "durationMs": 10042,
+      "ok": true,
+      "readBackMatched": true
+    },
+    {
+      "iteration": 24,
+      "startedAt": "2026-07-31T08:17:06.381Z",
+      "durationMs": 2169,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 25,
+      "startedAt": "2026-07-31T08:17:08.801Z",
+      "durationMs": 2485,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 26,
+      "startedAt": "2026-07-31T08:17:11.536Z",
+      "durationMs": 1314,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 27,
+      "startedAt": "2026-07-31T08:17:13.100Z",
+      "durationMs": 3285,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 28,
+      "startedAt": "2026-07-31T08:17:16.634Z",
+      "durationMs": 2587,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 29,
+      "startedAt": "2026-07-31T08:17:19.471Z",
+      "durationMs": 5328,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 30,
+      "startedAt": "2026-07-31T08:17:25.050Z",
+      "durationMs": 3023,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 31,
+      "startedAt": "2026-07-31T08:17:28.324Z",
+      "durationMs": 1564,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 32,
+      "startedAt": "2026-07-31T08:17:30.138Z",
+      "durationMs": 2031,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 33,
+      "startedAt": "2026-07-31T08:17:32.420Z",
+      "durationMs": 3517,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 34,
+      "startedAt": "2026-07-31T08:17:36.188Z",
+      "durationMs": 2604,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 35,
+      "startedAt": "2026-07-31T08:17:39.043Z",
+      "durationMs": 3430,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 36,
+      "startedAt": "2026-07-31T08:17:42.724Z",
+      "durationMs": 2883,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 37,
+      "startedAt": "2026-07-31T08:17:45.857Z",
+      "durationMs": 1782,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 38,
+      "startedAt": "2026-07-31T08:17:47.889Z",
+      "durationMs": 1781,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 39,
+      "startedAt": "2026-07-31T08:17:49.921Z",
+      "durationMs": 2199,
+      "ok": true,
+      "readBackMatched": false
+    },
+    {
+      "iteration": 40,
+      "startedAt": "2026-07-31T08:17:52.371Z",
+      "durationMs": 3340,
+      "ok": true,
+      "readBackMatched": false
+    }
+  ]
+}
