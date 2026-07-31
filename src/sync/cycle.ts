@@ -329,6 +329,20 @@ function logPlan(log: Logger, plan: ReconcilePlan, config: RuntimeConfig): void 
     });
   }
 
+  for (const report of plan.unmarkedEdits) {
+    // A queue value differing from its source on a row nobody marked Resolved.
+    // Never written — the reconciler cannot tell a staff edit from a stale
+    // mirror value, and about 700 rows were adopted from mirrors that stopped
+    // updating a month ago. Surfaced so the difference is visible to a human.
+    log.info('queue.unmarked_edit', {
+      queueSheet: report.queueSheet,
+      row: report.queueRow,
+      syncId: report.syncId,
+      field: report.field,
+      reason: report.fillsABlank ? 'would fill a blank' : 'would replace a value',
+    });
+  }
+
   for (const report of plan.duplicateSources) {
     // Two daily rows sharing one ID, almost always a copied row. Neither is
     // reconciled, because picking one silently hides the other visit forever.

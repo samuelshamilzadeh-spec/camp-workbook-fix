@@ -10,62 +10,75 @@ the single chokepoint every write passes through
 
 ---
 
-## Status: Phase 1, dry run
+## Status: reconciled, not yet automated
 
 | Phase | What it does | State |
 |---|---|---|
 | 0 | Add the `SyncID` column, stamp only rows currently carrying a queued keyword | Built — `npm run backfill`, dry run by default |
 | 1 | Read-only. Authenticate, read, log what it *would* change. Zero writes | Built — this is what the timer runs today |
-| 2a | Give the existing queue rows the same `SyncID` as their source row | Done — 679 of 681 written to the live workbook |
-| 2b | Append the patients who have no queue row yet | Built — `npm run append`, dry run by default, **not yet run live** |
-| 3 | Write-back of staff edits to the daily sheets | Not started |
-| 4 | Clearing and row removal | Not started |
+| 2a | Give the existing queue rows the same `SyncID` as their source row | Done — every linkable row |
+| 2b | Append the patients who have no queue row yet | Done — 1,035 rows across five tabs |
+| 2c | The `Resolved` column, real dates, and the house style | Done — `npm run migrate` |
+| 3 | Write-back of staff edits to the daily sheets | Done — requires the `Resolved` marker |
+| 4 | Clearing and row removal | Done — `npm run resolve-rows` |
 | 5 | Notes sheet | Not started |
 
-The reconciler already computes the *intents* for phases 2 through 4 — appends,
-write-backs, removals — because computing them is read-only and it is exactly
-what Phase 1 is supposed to log. Nothing applies them. `runCycle` throws if it is
-asked to write above phase 1, and there is a second, independent gate
-(`SYNC_LAYOUT_VERIFIED`) described below.
+A full cycle against the live workbook now plans **nothing** — every patient a
+keyword routes to a queue has a row there, linked to the daily row it came from.
+`runCycle` applies a plan according to `SYNC_PHASE`, behind a second independent
+gate (`SYNC_LAYOUT_VERIFIED`).
+
+**Nothing runs on a timer.** The Azure resources are written
+([`infra/main.bicep`](infra/main.bicep)) and have never been deployed.
+
+**Nothing reaches a daily sheet without a human saying so.** The reconciler
+cannot tell a staff edit from a stale mirror value — both are "the queue differs
+from the source", and ~700 rows were adopted from mirrors that stopped updating
+on 2026-07-30, so on those the daily sheet is the newer copy. A write-back
+requires the `Resolved` marker; an unmarked difference is reported and left
+alone.
 
 **Dry-run mode is permanent, not a Phase 1 scaffold.** `SYNC_DRY_RUN=true` keeps
 working at every phase.
 
 ---
 
-## Before this can do anything: the workbook has not been inspected
+## The layout, verified
 
-Everything in the `LAYOUT` block of `src/config.ts` is a guess taken from the
-build brief and marked `UNVERIFIED`. The guesses that matter:
+`LAYOUT` in `src/config.ts` began as guesses from the build brief. All of them
+have now been checked against the live workbook, and several were wrong:
 
-| Assumption | Current guess | How to confirm |
+| Assumption | The brief said | The workbook says |
 |---|---|---|
-| Daily sheet naming | a date, `2026-07-30` or `7/30/2026` | `npm run inspect` prints every sheet name |
-| Season size | ~60 sheets, so every sheet is read every cycle | `inspect` prints the total and the resulting scan mode |
-| How far ahead the office pre-creates sheets | 14 days (only matters above the full-scan threshold) | ask the office; `inspect` shows the furthest future sheet |
-| Daily header row / first data row | row 1 / row 2 | `inspect` guesses the header row per sheet |
-| Camp name column | C ("believed to be", per the brief) | `inspect` prints the distinct values in C |
-| Whether camp names need normalizing | casing and whitespace only | `inspect` prints them; look for aliases |
-| `SyncID` column | BA on every sheet | `inspect` prints the widest used column and every named range |
-| Daily-sheet field columns (D–M) | see `fieldColumns` | read the header row `inspect` prints |
-| Required fields per status | modelled per status, currently near-identical | ask the office |
+| Daily sheet naming | a date, format unknown | `July 30, 2026` — long month, comma |
+| Daily header / first data row | 1 / 2 | 1 / 2 ✓ |
+| Camp name column | C, "believed to be" | C, headed `CAMP NAME` ✓ |
+| Daily field columns | D–M | D–R, all of them carried ✓ |
+| **Queue header row** | **9, under an instruction block** | **1. There is no instruction block** |
+| `SyncID` column | BA | BA on every sheet ✓ |
+| Queue tab names | four canonical names | none of them matched; see the tab map |
 
-Until someone checks these and sets `SYNC_LAYOUT_VERIFIED=true`, **every write
-path refuses to run** — the Phase 0 backfill `--apply`, and any future applier.
-Read paths work fine, so `inspect` and the Phase 1 dry run are how you do the
-checking.
+The queue header row is the one that cost patients: reading from row 10 meant
+rows 2-9 of every mirror tab were never read at all, hiding 18 real patients from
+Phase 1 and from adoption. `detectQueueShape` now reads the header off the sheet
+and the configured values are only a fallback.
+
+`SYNC_LAYOUT_VERIFIED` gates every write path and is now `true`. Read paths never
+needed it, so `inspect` and a dry run remain the way to check anything.
 
 ```bash
-npm run inspect                 # answers the "before you write code" questions
-npm run reconcile               # one Phase 1 cycle, prints the plan
-npm run reconcile -- --force    # ignore the checkpoint and do the work anyway
-npm run adopt                   # Phase 2a: link existing queue rows (dry run)
-npm run append -- "United Refuah"   # Phase 2b: append missing rows (dry run)
+npm run inspect                       # what the workbook actually contains
+npm run reconcile                     # one cycle, prints the plan
+npm run reconcile -- --force          # ignore the checkpoint, do the work anyway
+npm run adopt                         # link existing queue rows        (dry run)
+npm run append -- "United Refuah"     # append missing rows             (dry run)
+npm run migrate -- "Missing Info"     # schema + house style + redraw   (dry run)
+npm run resolve-rows                  # write back, clear, remove       (dry run)
+npm run concurrency-test -- --sheet=... --cell=BZ1
 ```
 
-Every write script is dry run by default and takes `--apply`. See
-[`docs/phase2b.md`](docs/phase2b.md) for the Phase 2b run order and the reasons
-for it.
+Every write script is dry run by default and takes `--apply`. `npm run append`
+additionally refuses to open gaps in a live sheet without `--allow-inserts`.
 
 ### Open questions this codebase could not resolve on its own
 
@@ -75,17 +88,15 @@ for it.
    because it is deterministic and independent of phrasing. Every cell where the
    two readings could disagree is logged as `status.multi_match`, so the choice
    is reviewable. If the office wants position order, it is a four-line change.
-2. **"Clear column B on the queue sheet."** Requirement 4 says staff signal
-   removal by clearing column B of the *queue* sheet — but the documented queue
-   layout has `Source Row` in column B and no status column at all. Until that is
-   settled, `reconcile.ts` uses the conservative reading: a queue row counts as
-   cleared only when every patient field is blank. That cannot misfire, whereas
-   keying deletion off one column would delete a row on a stray backspace.
+2. ~~**"Clear column B on the queue sheet."**~~ **Settled.** The office asked for
+   an explicit `Resolved` column, which is what requirement 4 was reaching for.
+   The old reading — a row counts as cleared when every field is blank — is still
+   computed but is **never applied**: a row blank because somebody is midway
+   through retyping it looks identical to one they meant to delete.
 3. **Values that start with `+`.** Write-back sends `+1 555 …` to Excel as a
    string, and Excel treats a leading `+` as formula-ish. A leading `=` is
    rejected outright; `+` is allowed, because refusing to sync a phone number
-   would be worse. Confirm what Excel actually stores during the concurrency
-   test, before Phase 3.
+   would be worse. Still unconfirmed — no write-back has yet carried one.
 4. **Existing staff notes.** The brief's own open question — whether manual
    annotations exist anywhere today, most likely on the daily sheets. If they do
    they need mapping into the notes sheet keyed by `SyncID`, and that mapping is
