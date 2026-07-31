@@ -13,6 +13,7 @@ import type {
 import { cellAddress } from '../domain/cells';
 import type { Logger } from '../logging';
 import type { Workbook } from '../graph/workbook';
+import { planDividerStyle } from '../domain/style';
 import { applyRemovals } from './removals';
 
 /**
@@ -61,6 +62,8 @@ export interface ApplyPlanResult {
   skipped: number;
   /** Divider and TOTAL lines rewritten because the tab's row count changed. */
   recounted: number;
+  /** Style operations applied to camp dividers this cycle created. */
+  styled: number;
   /** True when anything at all was written. Drives the loop guard. */
   wrote: boolean;
 }
@@ -75,12 +78,15 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
     removed: 0,
     skipped: 0,
     recounted: 0,
+    styled: 0,
     wrote: false,
   };
 
   // Tabs whose row layout this cycle changed, so the divider and TOTAL counts
   // on them can be brought back into line at the end.
   const touchedTabs = new Set<string>();
+  /** Tab -> camps whose block this cycle created, which need styling. */
+  const newCamps = new Map<string, string[]>();
 
   const stamps = plan.intents.filter((i): i is StampIdIntent => i.kind === 'stamp-id');
   const appends = plan.intents.filter(
@@ -173,6 +179,12 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
     result.appended += queuePlan.appended;
     for (const intent of forQueue) appendedOk.add(intent.syncId);
     touchedTabs.add(tab);
+    // Camps that did not exist on this tab a moment ago. Their divider rows are
+    // written as bare text and need dressing, or a new camp turns up as an
+    // unbanded label between banded ones.
+    for (const placement of queuePlan.placements) {
+      if (placement.isNew) newCamps.set(tab, [...(newCamps.get(tab) ?? []), placement.camp]);
+    }
   }
 
   if (config.phase < 3) return result;
@@ -274,6 +286,38 @@ export async function applyPlan(input: ApplyPlanInput): Promise<ApplyPlanResult>
       await workbook.writeRange(tab, operation.address, operation.values);
       result.wrote = true;
       result.recounted++;
+    }
+
+    // Dress the dividers this cycle created, and the TOTAL, from the same fresh
+    // parse — the row numbers moved when the rows went in.
+    const camps = newCamps.get(tab);
+    if (!camps || camps.length === 0) continue;
+
+    for (const operation of planDividerStyle(fresh, camps, layout)) {
+      switch (operation.kind) {
+        case 'fill':
+          if (operation.fill) await workbook.setFill(tab, operation.address, operation.fill);
+          break;
+        case 'font':
+          if (operation.font) await workbook.setFont(tab, operation.address, operation.font);
+          break;
+        case 'format':
+          if (operation.format) await workbook.setRangeFormat(tab, operation.address, operation.format);
+          break;
+        case 'border':
+          if (operation.border) {
+            await workbook.setBorder(tab, operation.address, operation.border.edge, {
+              style: operation.border.style,
+              color: operation.border.color,
+              weight: operation.border.weight,
+            });
+          }
+          break;
+        default:
+          break;
+      }
+      result.wrote = true;
+      result.styled++;
     }
   }
 

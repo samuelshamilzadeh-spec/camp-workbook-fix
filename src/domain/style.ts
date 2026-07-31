@@ -276,6 +276,63 @@ export function planQueueStyle(input: PlanQueueStyleInput): StylePlan {
 }
 
 /**
+ * The house style for specific divider rows, and the TOTAL line.
+ *
+ * A cycle writes a camp divider's TEXT when it creates a block, but nothing was
+ * dressing it — only `npm run migrate` did, by hand. So a camp appearing for the
+ * first time got a bare label sitting in the middle of banded ones, which is
+ * exactly the moment a queue looks broken to somebody reading it.
+ *
+ * Scoped to the rows named rather than the whole sheet: restyling every divider
+ * on a 35-camp tab is a hundred Graph calls, which does not belong in a
+ * five-second cycle. A new camp is rare and costs three.
+ */
+export function planDividerStyle(
+  sheet: ParsedQueueSheet,
+  camps: readonly string[],
+  layout: WorkbookLayout = LAYOUT,
+): StyleOperation[] {
+  const first = layout.queue.firstColumn;
+  const last = lastQueueColumnLetter(sheet.sheet, layout);
+  const wanted = new Set(camps.map((camp) => camp.replace(/\s+/g, ' ').trim().toLowerCase()));
+
+  const operations: StyleOperation[] = [];
+  const band = (row: number, fill: string, color: string, height: number, what: string) => {
+    const address = rangeAddress(first, row, last, row);
+    operations.push({ kind: 'fill', address, what, fill });
+    operations.push({
+      kind: 'font',
+      address,
+      what,
+      font: { bold: true, color, size: STYLE.fontSize, name: STYLE.fontName },
+    });
+    operations.push({
+      kind: 'format',
+      address,
+      what,
+      format: { horizontalAlignment: 'Left', verticalAlignment: 'Center', rowHeight: height },
+    });
+  };
+
+  for (const group of sheet.groups) {
+    if (!wanted.has(group.camp.replace(/\s+/g, ' ').trim().toLowerCase())) continue;
+    band(group.headerRow, STYLE.dividerFill, STYLE.dividerFont, STYLE.dividerRowHeight, `divider: ${group.camp}`);
+  }
+
+  if (sheet.totalRow !== undefined) {
+    band(sheet.totalRow, STYLE.totalFill, STYLE.totalFont, STYLE.dividerRowHeight, 'total');
+    operations.push({
+      kind: 'border',
+      address: rangeAddress(first, sheet.totalRow, last, sheet.totalRow),
+      what: 'rule above the total',
+      border: { edge: 'EdgeTop', style: 'Continuous', color: STYLE.headerFill, weight: 'Medium' },
+    });
+  }
+
+  return operations;
+}
+
+/**
  * Which cells on an already-written row still need the red blank-required
  * shading, derived from the values on the sheet rather than from an intent.
  *

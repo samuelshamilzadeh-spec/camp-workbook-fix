@@ -15,7 +15,7 @@ import {
 } from '../src/domain/queueSheets';
 import { parseDailySheet } from '../src/domain/dailySheets';
 import { reconcile, sameFieldValue } from '../src/domain/reconcile';
-import { planQueueStyle } from '../src/domain/style';
+import { planDividerStyle, planQueueStyle } from '../src/domain/style';
 import type { RangeData } from '../src/graph/workbook';
 
 const WIDTH = 53;
@@ -325,5 +325,44 @@ describe('a date that is not a day on the calendar', () => {
   it('does not treat two different bad dates as the same patient', () => {
     // Both roll to a real date under the old behaviour, and could have collided.
     expect(sameDay('14/24/2014', '02/24/2015')).toBe(false);
+  });
+});
+
+describe('a camp appearing for the first time', () => {
+  it('gets the same band every other divider has', () => {
+    // A cycle writes a new divider's TEXT but nothing was dressing it — only
+    // `npm run migrate` did. So a new camp turned up as a bare label sitting
+    // between banded ones, which is the moment a queue looks broken to somebody
+    // reading it.
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [{ last: 'A', syncId: 'S000000000001' }]),
+    );
+    // Pretend row 2 is the divider for a brand new camp.
+    const withGroup = { ...sheet, groups: [{ camp: 'Gevurah', headerRow: 2, declaredCount: 1, rows: [] }] };
+
+    const ops = planDividerStyle(withGroup as any, ['Gevurah']);
+    expect(ops.some((o) => o.kind === 'fill' && o.address === 'A2:R2')).toBe(true);
+    expect(ops.some((o) => o.kind === 'font' && o.font?.bold === true)).toBe(true);
+  });
+
+  it('styles only the camps named, not every divider on the tab', () => {
+    // Restyling all 35 camps on Not Accepted is a hundred Graph calls, which
+    // does not belong in a five-second cycle.
+    const sheet = parseQueueSheet(
+      'Missing Info',
+      queueRange('Missing Info', [{ last: 'A', syncId: 'S000000000001' }]),
+    );
+    const withGroups = {
+      ...sheet,
+      groups: [
+        { camp: 'Achim', headerRow: 2, declaredCount: 1, rows: [] },
+        { camp: 'Gevurah', headerRow: 5, declaredCount: 1, rows: [] },
+      ],
+    };
+
+    const ops = planDividerStyle(withGroups as any, ['Gevurah']);
+    expect(ops.every((o) => !o.address.startsWith('A2'))).toBe(true);
+    expect(ops.some((o) => o.address === 'A5:R5')).toBe(true);
   });
 });
