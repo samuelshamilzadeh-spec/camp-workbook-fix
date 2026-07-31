@@ -233,7 +233,9 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
         appended: applied.appended,
         wroteBack: applied.wroteBack,
         removed: applied.removed,
+        cleared: applied.cleared,
         recounted: applied.recounted,
+        styled: applied.styled,
         skipped: applied.skipped,
       },
     });
