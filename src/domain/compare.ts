@@ -90,3 +90,27 @@ export function sameMeaning(field: QueueColumn, a: unknown, b: unknown): boolean
   if (isBlank(a) || isBlank(b)) return false;
   return comparisonKey(field, a) === comparisonKey(field, b);
 }
+
+/**
+ * Repairs a value on its way back to a daily sheet.
+ *
+ * `comparisonKey` normalizes for comparison and nothing else, so a value the
+ * code correctly identifies as genuinely changed can still be written back in
+ * the form Excel damaged it into. A zip code is the case that matters: the queue
+ * cell is numeric, so `08701` arrives as `8701`, and writing that over a
+ * correct value replaces a real zip code with a four-digit number.
+ *
+ * Only zip codes are repaired. Nothing else here loses information on the way
+ * in, and inventing a canonical form for a phone number or a town would be
+ * rewriting what somebody typed rather than restoring what Excel removed.
+ */
+export function repairForWrite(field: QueueColumn, value: unknown): unknown {
+  if (field !== 'Zip Code' || isBlank(value)) return value;
+
+  const raw = String(value).trim();
+  const digits = raw.replace(/\D/g, '');
+  // Only a bare five-digit-or-shorter number that lost a leading zero. A zip+4
+  // or anything with punctuation is left exactly as typed.
+  if (!/^\d{1,5}$/.test(raw) || digits.length === 5) return value;
+  return digits.padStart(5, '0');
+}

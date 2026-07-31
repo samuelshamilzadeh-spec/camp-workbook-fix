@@ -64,12 +64,36 @@ function resolveDestination(wanted: string): QueueSheetName {
   return match;
 }
 
-/** Does the header row already carry `Resolved` where it belongs? */
-function hasResolvedColumn(headerValues: unknown[], firstIndex: number): boolean {
-  const label = String(headerValues[firstIndex + 2] ?? '')
-    .trim()
-    .toLowerCase();
-  return label === 'resolved';
+/**
+ * Has the column already been inserted?
+ *
+ * Asked STRUCTURALLY, by where `Last Name` sits, not by whether C1 reads
+ * "Resolved". The thing this guards is a physical column insert; the label is
+ * written three operations later, and everything between them can fail. An
+ * interrupted run — the insert lands, then a 503 on the SyncID rescue — leaves a
+ * tab that is already shifted and has no label, and a label-based guard would
+ * cheerfully shift it a second time, putting every patient's data two columns
+ * from where the code expects it.
+ *
+ * `Last Name` at index 2 means the column is absent; at index 3 it is already
+ * there, labelled or not.
+ */
+function resolvedColumnState(
+  headerValues: readonly unknown[],
+  columns: readonly QueueColumn[],
+): 'absent' | 'present' | 'unrecognizable' {
+  const label = (index: number) =>
+    String(headerValues[index] ?? '')
+      .trim()
+      .toLowerCase();
+
+  const withColumn = columns.indexOf('Resolved');
+  if (withColumn === -1) return 'present'; // this tab does not use one
+
+  if (label(withColumn) === 'resolved') return 'present';
+  if (label(withColumn + 1) === 'last name') return 'present'; // shifted, label lost
+  if (label(withColumn) === 'last name') return 'absent';
+  return 'unrecognizable';
 }
 
 async function main(): Promise<void> {
@@ -108,8 +132,15 @@ async function main(): Promise<void> {
 
     const headerValues = used.values[shape.headerRow - parseAddress(used.address).startRow] ?? [];
     const wantsResolved = columns.includes('Resolved');
-    const alreadyHasResolved = hasResolvedColumn(headerValues, firstIndex);
-    const needsColumnInsert = wantsResolved && !alreadyHasResolved;
+    const state = resolvedColumnState(headerValues, columns);
+    if (state === 'unrecognizable') {
+      throw new Error(
+        `Cannot tell whether "${tab}" already has the Resolved column: neither ` +
+          `${offsetColumn(first, 2)}1 nor ${offsetColumn(first, 3)}1 reads as expected. ` +
+          'Refusing to shift a sheet whose shape is not understood.',
+      );
+    }
+    const needsColumnInsert = wantsResolved && state === 'absent';
 
     // --- report -------------------------------------------------------------
     out();
@@ -122,7 +153,7 @@ async function main(): Promise<void> {
       `Resolved:      ${
         !wantsResolved
           ? 'not used on this tab (append-only record)'
-          : alreadyHasResolved
+          : state === 'present'
             ? 'already present'
             : `WILL BE INSERTED at ${offsetColumn(first, 2)}, shifting everything right`
       }`,
@@ -290,7 +321,14 @@ function planDateWrites(
     let changed = false;
     for (let row = firstDataRow; row <= lastRow; row++) {
       const current = cellFromGrid(used.values, startRow, startColumn, row, letter);
-      const serial = toExcelSerial(current);
+      // A bare number written as TEXT is not a date. `2009` in a Date of Birth
+      // cell is a year somebody typed, and `toExcelSerial` happily reads it as
+      // serial 2009 — 1905 — so converting it would replace what staff wrote
+      // with a wrong date and no way back to the original. A value that is
+      // already a number needs no conversion, and a real text date has
+      // separators in it.
+      const yearOnlyText = typeof current === 'string' && /^\s*\d{1,5}\s*$/.test(current);
+      const serial = yearOnlyText ? undefined : toExcelSerial(current);
       // A divider row's first cell is its label, not a date. toExcelSerial
       // returns undefined for it, so it is written back unchanged.
       if (serial !== undefined && serial !== current) changed = true;

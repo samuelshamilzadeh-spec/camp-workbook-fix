@@ -194,7 +194,7 @@ describe('reconcile', () => {
     expect(plan.counts['write-back']).toBe(0);
   });
 
-  it('plans a write-back when staff edit a field on the queue sheet', () => {
+  it('plans a write-back when staff edit a field and mark the row Resolved', () => {
     const plan = reconcile({
       daily: [
         parseDailySheet(
@@ -211,6 +211,7 @@ describe('reconcile', () => {
             {
               kind: 'row',
               dateOfVisit: '2026-07-30',
+              resolved: 'Done',
               last: 'Smith',
               first: 'A',
               dob: 'x',

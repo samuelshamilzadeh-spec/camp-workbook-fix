@@ -9,7 +9,7 @@ import {
 } from '../config';
 import { isBlank } from './cells';
 import { identityKey } from './adopt';
-import { sameMeaning } from './compare';
+import { repairForWrite, sameMeaning } from './compare';
 import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
@@ -94,6 +94,19 @@ export interface OrphanReport {
   reason: 'unknown-sync-id' | 'missing-sync-id' | 'duplicate-sync-id';
 }
 
+/**
+ * A queue value that differs from its source on a row nobody marked Resolved.
+ * Reported, never written — see `pushWriteBacks`.
+ */
+export interface UnmarkedEditReport {
+  queueSheet: QueueSheetName;
+  queueRow: number;
+  syncId: string;
+  field: QueueColumn;
+  /** True when the daily cell is empty, so writing it could only add. */
+  fillsABlank: boolean;
+}
+
 /** Two rows on the daily sheets carrying one SyncID. Neither is reconciled. */
 export interface DuplicateSourceReport {
   sheet: string;
@@ -138,6 +151,7 @@ export interface ReconcilePlan {
   orphans: OrphanReport[];
   unrecognizedResolved: UnrecognizedResolvedReport[];
   blankedOnQueue: BlankedFieldReport[];
+  unmarkedEdits: UnmarkedEditReport[];
   duplicateSources: DuplicateSourceReport[];
   wouldDuplicate: WouldDuplicateReport[];
   unrecognizedCounts: Record<string, number>;
@@ -159,6 +173,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   const orphans: OrphanReport[] = [];
   const unrecognizedResolved: UnrecognizedResolvedReport[] = [];
   const blankedOnQueue: BlankedFieldReport[] = [];
+  const unmarkedEdits: UnmarkedEditReport[] = [];
   const duplicateSources: DuplicateSourceReport[] = [];
   const wouldDuplicate: WouldDuplicateReport[] = [];
   const duplicateSourceIds = new Map<string, DailyRow[]>();
@@ -284,6 +299,27 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
    */
   const writtenBack = new Set<string>();
   function pushWriteBacks(queueRow: QueueRow, dailyRow: DailyRow, syncId: string): void {
+    // An append-only record never sends anything back. The office confirmed a
+    // United Refuah row is copied across and then never changes.
+    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) return;
+
+    // NOTHING IS WRITTEN TO A DAILY SHEET WITHOUT A HUMAN SAYING SO.
+    //
+    // The reconciler cannot tell a staff edit from a stale mirror value. Both
+    // are "the queue differs from the source", and roughly 700 of these rows
+    // were adopted from mirror sheets that stopped updating on 2026-07-30 —
+    // so on those rows the daily sheet is the newer copy, not the older one.
+    // Writing back without a signal takes a phone number the office corrected
+    // last week and replaces it with the one the mirror captured last month,
+    // on the record that gets billed from, with nothing to recover it from.
+    //
+    // `Resolved` is that signal, and it is the reason the office asked for the
+    // column: fill in what was missing, mark it, and the fix travels. A row
+    // nobody marked has its differences REPORTED instead — including when the
+    // row is about to be deleted, so the work is never silently lost, only
+    // never silently written.
+    const marked = queueRow.resolved.kind === 'resolved';
+
     for (const [column, queueValue] of Object.entries(queueRow.values)) {
       const field = column as QueueColumn;
       if (QUEUE_ONLY_COLUMNS.includes(field)) continue;
@@ -318,6 +354,18 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       }
 
       writtenBack.add(once);
+
+      if (!marked) {
+        unmarkedEdits.push({
+          queueSheet: queueRow.sheet,
+          queueRow: queueRow.row,
+          syncId,
+          field,
+          fillsABlank: isBlank(dailyRow.fields[field]),
+        });
+        continue;
+      }
+
       intents.push({
         kind: 'write-back',
         syncId,
@@ -326,7 +374,11 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
         queueSheet: queueRow.sheet,
         queueRow: queueRow.row,
         field,
-        value: queueValue,
+        // Repaired on the way out. `compare.ts` normalizes for comparison only,
+        // so a zip code Excel stripped to `8527` on the way in would otherwise be
+        // written back over `08527` in its damaged form — correctly identified as
+        // a different value, and still wrong.
+        value: repairForWrite(field, queueValue),
       });
     }
   }
@@ -548,6 +600,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     orphans,
     unrecognizedResolved,
     blankedOnQueue,
+    unmarkedEdits,
     duplicateSources,
     wouldDuplicate,
     unrecognizedCounts,
