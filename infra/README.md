@@ -113,8 +113,44 @@ az functionapp config appsettings set -g "$RG" -n "$APP" --settings SYNC_LAYOUT_
 az functionapp config appsettings set -g "$RG" -n "$APP" --settings SYNC_DRY_RUN=false
 ```
 
-Watch a cycle before flipping the last one. `cycle.plan` says what it would do;
-`cycle.applied` says what it did.
+### Reading the logs
+
+**`az webapp log tail` does not work here.** A Linux Consumption Function App
+has no SCM log stream, so it returns a 404 that looks like a broken deployment
+and is not one. Logs go to Application Insights.
+
+First, check the deployed package actually registered the function — this is the
+thing that most often goes wrong after a zip deploy, and it fails silently:
+
+```bash
+az functionapp function list -g "$RG" -n "$APP" -o table
+```
+
+`syncTimer` should be listed. An empty table means the zip did not contain a
+recognisable function app: check that `dist/` was built and that the zip has
+`host.json` at its ROOT, not nested inside a folder.
+
+Then read what it is doing. Allow two or three minutes for ingestion:
+
+```bash
+az extension add --name application-insights --only-show-errors
+APPID=$(az monitor app-insights component show -g "$RG" -a "$APP-ai" --query appId -o tsv)
+
+az monitor app-insights query --app "$APPID" --analytics-query \
+  "traces | where timestamp > ago(30m) | order by timestamp desc | take 30 | project timestamp, message" \
+  --query "tables[0].rows" -o tsv
+```
+
+`cycle.plan` says what it would do; `cycle.applied` says what it did. All zeroes
+in `cycle.plan` means it agrees with `npm run reconcile` run from a laptop.
+
+Exceptions are excluded from sampling, so a failure is never dropped:
+
+```bash
+az monitor app-insights query --app "$APPID" --analytics-query \
+  "exceptions | where timestamp > ago(30m) | project timestamp, outerMessage" \
+  --query "tables[0].rows" -o tsv
+```
 
 ## The rollback lever
 
