@@ -21,10 +21,13 @@ Last updated 2026-07-30.
 
 ## Not built yet
 
-### Phase 0 — stamping IDs into the workbook
-The backfill script exists and is dry-run-only. It needs updating for the
-two-identifier model (`SyncID` per visit, `PatientID` per person) and to apply
-the adoption matches. **Nothing has been stamped.**
+### Phase 0 / 2a — stamping IDs — DONE
+679 of 681 existing queue rows now share a SyncID with their source row on the
+daily sheet. 1,358 IDs written to column BA across 39 range writes; re-running
+finds nothing to do. One row remains unlinked pending a date of birth.
+
+The standalone `phase0-backfill.ts` still needs updating for the two-identifier
+model (`SyncID` per visit, `PatientID` per person) before it is used.
 
 ### Phase 2 — populating the queue sheets
 The reconciler decides *what* to write. Nothing *does* the writing. Still
@@ -54,8 +57,8 @@ the Function App and OIDC credentials exist.
 
 - **Concurrency test.** Not run. The one thing the brief insists precedes
   Phase 2.
-- **`SYNC_LAYOUT_VERIFIED` is still `false`**, which blocks every write path by
-  design. Flipping it is deliberate, not incidental.
+- **`SYNC_LAYOUT_VERIFIED` is now `true`.** That gate is spent; future write
+  scripts will not stop to ask.
 - **Rotate the client secrets.** Several were created during setup and at least
   two appeared in a chat transcript. `az ad app credential list` shows them.
 - **Reconciliation gate.** The brief wants old-vs-new diffed for several days
