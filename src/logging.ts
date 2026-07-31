@@ -90,6 +90,23 @@ export function redact(value: unknown, key?: string): unknown {
 
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {};
+
+    // `counts` is a map of category -> how many, and its keys are labels this
+    // codebase writes rather than anything read out of a cell. Checking those
+    // keys against the allow-list redacted every number in it — so the one line
+    // that says what a cycle actually did read
+    // `{"stamped":"[redacted:number]","appended":"[redacted:number]"}`, which is
+    // the whole of this job's observability reduced to noise.
+    //
+    // Numbers pass through with their label. Anything else in there does not,
+    // so a count map that somehow carried a value still cannot leak one.
+    if (key === 'counts') {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        out[k] = typeof v === 'number' ? v : `[redacted:${typeofLabel(v)}]`;
+      }
+      return out;
+    }
+
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       out[k] = redact(v, k);
     }

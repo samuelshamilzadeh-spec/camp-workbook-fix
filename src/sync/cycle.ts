@@ -15,6 +15,7 @@ import {
 } from '../domain/queueSheets';
 import { reconcile, type ReconcilePlan } from '../domain/reconcile';
 import { newSyncId } from '../domain/syncId';
+import { applyPlan } from './apply';
 import { describeError, type Logger } from '../logging';
 import type { StateStore, SyncState } from '../state/store';
 import type { Workbook } from '../graph/workbook';
@@ -213,12 +214,54 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
       };
     }
 
-    // Phases 0 and 2-5 attach their appliers here. Nothing writes yet; see the
-    // phase table in the README.
-    throw new Error(
-      `No applier is wired for phase ${config.phase}. Build phases in order; ` +
-        'see "Build in this order" in the README.',
-    );
+    // --- Apply -------------------------------------------------------------
+    const applied = await applyPlan({
+      workbook,
+      config,
+      plan,
+      daily,
+      queues,
+      tabFor: new Map(bindings.map((binding) => [binding.status, binding.tab])),
+      log,
+    });
+
+    log.info('cycle.applied', {
+      phase: config.phase,
+      count: applied.stamped + applied.appended + applied.wroteBack + applied.removed,
+      counts: {
+        stamped: applied.stamped,
+        appended: applied.appended,
+        wroteBack: applied.wroteBack,
+        removed: applied.removed,
+        skipped: applied.skipped,
+      },
+    });
+
+    // Read the file's timestamp back so the NEXT cycle recognizes this write as
+    // ours and does not treat it as a staff change. Without this the job wakes
+    // itself every five seconds forever, which at this cadence is a throttling
+    // incident rather than merely wasteful.
+    const after = applied.wrote ? await workbook.getFileMetadata() : metadata;
+
+    await state.write({
+      ...previous,
+      lastSeenModified: after.lastModifiedDateTime,
+      lastSeenETag: after.eTag,
+      lastSelfWriteModified: applied.wrote
+        ? after.lastModifiedDateTime
+        : previous.lastSelfWriteModified,
+      lastScannedSheets: scannedSheets,
+      scanCursor: scan.nextCursor,
+      lastFullCycleAt: new Date().toISOString(),
+    });
+
+    return {
+      status: 'planned',
+      plan,
+      scannedSheets,
+      applied: true,
+      durationMs: Date.now() - startedAt,
+    };
   } catch (error) {
     log.error('cycle.failed', describeError(error));
     throw error;
