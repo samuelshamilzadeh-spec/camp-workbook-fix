@@ -33,9 +33,14 @@ export async function syncTimer(timer: Timer, context: InvocationContext): Promi
     context.debug(JSON.stringify({ event: 'timer.past_due' }));
   }
 
-  const deps = getSyncContext(sink);
+  // Inside the try: building the context loads and validates configuration, and
+  // a bad setting throws here rather than in runCycle. Outside, that throw
+  // escaped with nothing written to Application Insights — an app failing every
+  // invocation for a reason nobody could see.
+  let deps: ReturnType<typeof getSyncContext> | undefined;
 
   try {
+    deps = getSyncContext(sink);
     const result = await runCycle(deps);
     if (result.status === 'planned') {
       deps.log.info('cycle.complete', {
@@ -49,7 +54,11 @@ export async function syncTimer(timer: Timer, context: InvocationContext): Promi
     // Throwing marks the invocation failed, which is what the health signal in
     // Application Insights should show. Exceptions are excluded from sampling in
     // host.json so none of these are lost.
-    deps.log.error('cycle.error', describeError(error));
+    //
+    // `deps` is undefined when configuration itself failed to load, so the raw
+    // sink is the only logger there is.
+    if (deps) deps.log.error('cycle.error', describeError(error));
+    else sink.error(JSON.stringify({ event: 'cycle.error', ...describeError(error) }));
     throw error;
   }
 }
