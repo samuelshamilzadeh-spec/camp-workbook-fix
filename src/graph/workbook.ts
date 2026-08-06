@@ -326,6 +326,64 @@ export class Workbook {
     );
   }
 
+  /**
+   * The fill of a range, or `undefined` when the cells do not agree on one.
+   *
+   * Graph answers a multi-cell range with a single colour only when every cell
+   * in it carries that colour; a range whose cells differ comes back with a null
+   * colour. That is the whole basis of the fill audit in
+   * `scripts/split-queue.ts`: probe a run, and if the answer is "they disagree",
+   * probe its cells individually.
+   *
+   * The catch is that a null answer for a SINGLE cell means the opposite — there
+   * is no fill on it — so the two readings are only distinguishable by how many
+   * cells were asked about. Callers must know which they asked for; the
+   * `mixed` flag says which reading applies.
+   */
+  async getFill(sheetName: string, address: string): Promise<{ color: string | undefined }> {
+    const result = await this.withSession(() =>
+      this.graph.request<{ color?: string | null }>(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/fill?$select=color`,
+        { headers: this.sessionHeaders },
+      ),
+    );
+    const color = typeof result.color === 'string' ? result.color.trim() : '';
+    return { color: color === '' ? undefined : color };
+  }
+
+  /** Adds an empty worksheet. Fails if the name is already taken. */
+  async addWorksheet(name: string): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(`${this.workbookPath}/worksheets/add`, {
+        method: 'POST',
+        body: { name },
+        headers: this.sessionHeaders,
+      }),
+    );
+  }
+
+  /**
+   * Renames a worksheet and/or changes its visibility.
+   *
+   * A rename is a silent outage in this design: `resolveSheetName` reports the
+   * old name as absent, the cycle logs `queue.sheet_missing`, and every row bound
+   * for it goes nowhere. It happened once already when the office renamed
+   * `Missing Info (New)`. So this is only ever used on a tab that has just been
+   * emptied and taken out of `QUEUE_SHEET_NAMES` — never on a live one.
+   */
+  async updateWorksheet(
+    sheetName: string,
+    changes: { name?: string; visibility?: 'Visible' | 'Hidden' | 'VeryHidden' },
+  ): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(worksheetPath(this.workbookPath, sheetName), {
+        method: 'PATCH',
+        body: changes,
+        headers: this.sessionHeaders,
+      }),
+    );
+  }
+
   async clearFill(sheetName: string, address: string): Promise<void> {
     await this.withSession(() =>
       this.graph.request(

@@ -72,9 +72,9 @@ describe('a blank on the queue is not an instruction to erase the source', () =>
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
+          'Missing Info - July',
           // The old mirror never copied Insurance Carrier onto this legacy row.
-          queueRange('Missing Info', [
+          queueRange('Missing Info - July', [
             { resolved: 'Done', last: 'Smith', first: 'A', dob: 'x', phone: '555-1234', carrier: '', syncId: 'S000000000001' },
           ]),
         ),
@@ -89,7 +89,7 @@ describe('a blank on the queue is not an instruction to erase the source', () =>
     // string clears a cell even though null does not, and the daily sheet is
     // the copy that gets billed from.
     expect(plan.blankedOnQueue).toEqual([
-      { queueSheet: 'Missing Info', queueRow: 2, syncId: 'S000000000001', field: 'Insurance Carrier' },
+      { queueSheet: 'Missing Info - July', queueRow: 2, syncId: 'S000000000001', field: 'Insurance Carrier' },
     ]);
   });
 });
@@ -98,12 +98,12 @@ describe('one physical row, one removal', () => {
   it('does not remove a row twice when it both moved queue and was blanked', () => {
     const plan = reconcile({
       daily: [
-        parseDailySheet('S', dailyRange('S', [
+        parseDailySheet('July 30, 2026', dailyRange('July 30, 2026', [
           { status: 'verify insurance', last: 'A', first: 'B', dob: 'x', syncId: 'S000000000001' },
         ])),
       ],
       queues: [
-        parseQueueSheet('Missing Info', queueRange('Missing Info', [{ syncId: 'S000000000001' }])),
+        parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [{ syncId: 'S000000000001' }])),
       ],
       newSyncId: ids(),
     });
@@ -121,12 +121,12 @@ describe('work typed onto a row that is about to be removed', () => {
   it('carries the edit home before removing a wrong-queue row marked Done', () => {
     const plan = reconcile({
       daily: [
-        parseDailySheet('S', dailyRange('S', [
+        parseDailySheet('July 30, 2026', dailyRange('July 30, 2026', [
           { status: 'verify insurance', last: 'A', first: 'B', dob: 'x', phone: '', syncId: 'S000000000001' },
         ])),
       ],
       queues: [
-        parseQueueSheet('Missing Info', queueRange('Missing Info', [
+        parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [
           { resolved: 'Done', last: 'A', first: 'B', dob: 'x', phone: '555-9999', syncId: 'S000000000001' },
         ])),
       ],
@@ -149,13 +149,13 @@ describe('a queue row with no SyncID is still a row', () => {
   it('does not append beside a patient who is already on that tab unstamped', () => {
     const plan = reconcile({
       daily: [
-        parseDailySheet('S', dailyRange('S', [
+        parseDailySheet('July 30, 2026', dailyRange('July 30, 2026', [
           { status: 'missing info', last: 'A', first: 'B', dob: 'x', syncId: 'S000000000001' },
         ])),
       ],
       queues: [
         // Adoption could not link this one, so it carries no ID.
-        parseQueueSheet('Missing Info', queueRange('Missing Info', [{ last: 'A', first: 'B', dob: 'x' }])),
+        parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [{ last: 'A', first: 'B', dob: 'x' }])),
       ],
       newSyncId: ids(),
     });
@@ -163,7 +163,7 @@ describe('a queue row with no SyncID is still a row', () => {
     expect(plan.counts['append-queue-row']).toBe(0);
     expect(plan.wouldDuplicate).toEqual([
       {
-        queueSheet: 'Missing Info',
+        queueSheet: 'Missing Info - July',
         queueRow: 2,
         syncId: 'S000000000001',
         reason: 'unstamped-row-for-this-patient',
@@ -174,12 +174,12 @@ describe('a queue row with no SyncID is still a row', () => {
   it('still appends when the unstamped row is a different patient', () => {
     const plan = reconcile({
       daily: [
-        parseDailySheet('S', dailyRange('S', [
+        parseDailySheet('July 30, 2026', dailyRange('July 30, 2026', [
           { status: 'missing info', last: 'A', first: 'B', dob: 'x', syncId: 'S000000000001' },
         ])),
       ],
       queues: [
-        parseQueueSheet('Missing Info', queueRange('Missing Info', [{ last: 'Z', first: 'Y', dob: 'q' }])),
+        parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [{ last: 'Z', first: 'Y', dob: 'q' }])),
       ],
       newSyncId: ids(),
     });
@@ -200,7 +200,7 @@ describe('two daily rows carrying one SyncID', () => {
           { status: 'missing info', last: 'A', first: 'B', dob: 'x', syncId: 'S000000000001' },
         ])),
       ],
-      queues: [parseQueueSheet('Missing Info', queueRange('Missing Info', []))],
+      queues: [parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', []))],
       newSyncId: ids(),
     });
 
@@ -232,12 +232,12 @@ describe('nothing reaches a daily sheet without a human saying so', () => {
     });
 
   it('does not push a stale mirror value over a corrected one when the source finishes', () => {
-    const plan = stale('Ineligible & Inactive', 'lasante');
+    const plan = stale('Ineligible & Inactive - July', 'lasante');
     expect(plan.counts['write-back']).toBe(0);
     // Reported, so the difference is visible to a human rather than lost.
     expect(plan.unmarkedEdits).toEqual([
       {
-        queueSheet: 'Ineligible & Inactive',
+        queueSheet: 'Ineligible & Inactive - July',
         queueRow: 2,
         syncId: 'S000000000001',
         field: 'Phone Number',
@@ -249,7 +249,7 @@ describe('nothing reaches a daily sheet without a human saying so', () => {
   });
 
   it('does not push a stale value over a corrected one when the patient moves queue', () => {
-    const plan = stale('Missing Info', 'verify insurance');
+    const plan = stale('Missing Info - July', 'verify insurance');
     expect(plan.counts['write-back']).toBe(0);
     expect(plan.unmarkedEdits).toHaveLength(1);
   });
@@ -265,12 +265,12 @@ describe('nothing reaches a daily sheet without a human saying so', () => {
   it('repairs a zip code Excel damaged before writing it back', () => {
     const plan = reconcile({
       daily: [
-        parseDailySheet('S', dailyRange('S', [
+        parseDailySheet('July 30, 2026', dailyRange('July 30, 2026', [
           { status: 'missing info', last: 'A', zip: '08701', syncId: 'S000000000001' },
         ])),
       ],
       queues: [
-        parseQueueSheet('Missing Info', queueRange('Missing Info', [
+        parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [
           // Numeric cell: Excel stripped the leading zero on the way in.
           { resolved: 'Done', last: 'A', zip: 8527, syncId: 'S000000000001' },
         ])),

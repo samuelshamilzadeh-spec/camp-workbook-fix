@@ -22,6 +22,7 @@ the single chokepoint every write passes through
 | 3 | Write-back of staff edits to the daily sheets | Done — requires the `Resolved` marker |
 | 4 | Clearing and row removal | Done — `npm run resolve-rows` |
 | 5 | Notes sheet | Not started |
+| — | Split `Missing Info` and `Ineligible & Inactive` into one tab per month | Built — `npm run split` |
 
 A full cycle against the live workbook now plans **nothing** — every patient a
 keyword routes to a queue has a row there, linked to the daily row it came from.
@@ -73,12 +74,67 @@ npm run reconcile -- --force          # ignore the checkpoint, do the work anywa
 npm run adopt                         # link existing queue rows        (dry run)
 npm run append -- "United Refuah"     # append missing rows             (dry run)
 npm run migrate -- "Missing Info"     # schema + house style + redraw   (dry run)
+npm run split -- "Missing Info"       # cut a queue into monthly tabs   (dry run)
 npm run resolve-rows                  # write back, clear, remove       (dry run)
 npm run concurrency-test -- --sheet=... --cell=BZ1
 ```
 
 Every write script is dry run by default and takes `--apply`. `npm run append`
 additionally refuses to open gaps in a live sheet without `--allow-inserts`.
+
+### One queue, several tabs
+
+The office asked to work `Missing Info` and `Ineligible & Inactive` a month at a
+time, so each is now four tabs:
+
+    Missing Info - June           Ineligible & Inactive - June
+    Missing Info - July           Ineligible & Inactive - July
+    Missing Info - August         Ineligible & Inactive - August
+    Missing Info - Other          Ineligible & Inactive - Other
+
+`Verify Insurance`, `Not Accepted` and `United Refuah` stay as single tabs.
+
+This is why a **queue family** and a **queue tab** are different types in
+`src/config.ts`. A column B keyword can only tell you *what kind of problem* a
+row is — that is the family, and `status.ts` is unchanged. Which tab it lands on
+takes a second input, the month of the visit, and `domain/segments.ts` is the one
+place the two are combined. Keeping them apart is what let the split happen
+without touching a single keyword rule.
+
+A few consequences worth knowing:
+
+- **The month comes from the visit, so a row never moves between monthly tabs.**
+  It is read from the daily sheet's own name (`July 30, 2026`), which is the
+  thing the row is a record of. A patient's visit date does not change.
+- **`Other` is a destination, not a failure.** A visit outside those months, or a
+  `Date of Visit` that will not parse — the live workbook has one — lands there.
+  A row that cannot be placed must still end up somewhere a person can see it.
+- **Wrong month is just wrong queue.** A row on the June tab for a July visit
+  takes the same append-then-remove path as a row whose keyword changed. There is
+  no second notion of "wrong tab".
+- **The year is not in the tab name.** Right for a workbook holding one season,
+  wrong the moment a second is added — July 2027 would land beside July 2026. See
+  `MONTH_SEGMENTS`, which also carries the 31-character limit Excel puts on a
+  sheet name (`Ineligible & Inactive - September` does not fit).
+
+`npm run split -- "Missing Info"` performs the migration. It audits the source
+tab's fills against the style rules first and **refuses to write if it finds a
+colour the rules cannot regenerate**, because the new tabs are styled by
+re-deriving rather than by copying cell formats. It is idempotent, verifies every
+row landed before it reports success, and never deletes anything: `--archive`
+renames the original to `Missing Info (old)` and hides it, still holding every row
+exactly as it stood.
+
+Each new tab needs the same two settings Graph refuses to make — the `Resolved`
+dropdown and a frozen header row. The script prints the reminder.
+
+**Run it before enabling the timer.** `Missing Info` and `Ineligible & Inactive`
+are no longer tab names to this code, so between deploying and running the split
+those two queues are frozen: the old tabs are never read, the monthly ones do not
+exist yet, and rows bound for them are skipped with
+`apply.destination_unavailable`. Nothing is lost — the rows sit untouched and the
+reconciler is state-based, so it resumes the moment the tabs exist — but the gap
+is real, and closing it is one command.
 
 ### Open questions this codebase could not resolve on its own
 
@@ -257,7 +313,7 @@ timer (5s)
        ├─ matches our own last write (loop guard) → exit
        └─ changed
             ├─ open a workbook session (non-persisted while read-only)
-            ├─ read the four queue sheets' usedRange
+            ├─ read the eleven queue tabs' usedRange
             ├─ pick sheets to scan: all of them, at one season's size
             ├─ read those daily sheets' usedRange, 8 at a time
             ├─ reconcile → a list of intents
@@ -357,6 +413,7 @@ src/
     cells.ts            A1 address arithmetic
     dailySheets.ts      daily sheet parsing, camp normalizing, bounded scan
     queueSheets.ts      queue sheet parsing, shape detection, camp groups
+    segments.ts         which monthly tab a row belongs on, from its visit date
     reconcile.ts        state-based reconciliation -> intents
     compare.ts          does a value MEAN something different? the write-back gate
     dates.ts            Excel serials, both directions

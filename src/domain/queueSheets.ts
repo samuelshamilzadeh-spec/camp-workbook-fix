@@ -1,6 +1,8 @@
 import {
   LAYOUT,
   QUEUE_COLUMNS,
+  QUEUE_SHEET_NAMES,
+  QUEUE_SHEET_TABS,
   RESOLVED_VALUES,
   queueColumnsFor,
   type QueueColumn,
@@ -370,6 +372,34 @@ export function lastQueueColumnLetter(
   layout: WorkbookLayout = LAYOUT,
 ): string {
   return offsetColumn(layout.queue.firstColumn, queueColumnsFor(destination).length - 1);
+}
+
+/**
+ * Excel refuses a worksheet name longer than this, so a queue whose tab name
+ * overflows can never be created and its rows have nowhere to go.
+ */
+export const MAX_SHEET_NAME_LENGTH = 31;
+
+/**
+ * Every configured queue tab must be a name Excel will actually accept.
+ *
+ * This is one edit away from mattering. `Ineligible & Inactive` is 21 characters
+ * before a segment is added; `- August` fits at 30 and `- September` does not.
+ * Adding a month to `MONTH_SEGMENTS` is a one-line change that would otherwise
+ * fail at tab-creation time, deep inside a migration, against a live workbook.
+ */
+export function assertQueueTabNamesFit(): void {
+  const tooLong = QUEUE_SHEET_NAMES.map((name) => QUEUE_SHEET_TABS[name] ?? name).filter(
+    (tab) => tab.length > MAX_SHEET_NAME_LENGTH,
+  );
+  if (tooLong.length > 0) {
+    throw new Error(
+      `Excel caps a sheet name at ${MAX_SHEET_NAME_LENGTH} characters, and ` +
+        `${tooLong.map((tab) => `"${tab}" (${tab.length})`).join(', ')} ` +
+        `${tooLong.length === 1 ? 'is' : 'are'} longer. Shorten the segment names in ` +
+        'MONTH_SEGMENTS.',
+    );
+  }
 }
 
 /**

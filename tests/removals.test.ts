@@ -3,7 +3,7 @@ import { applyRemovals, type RemovalWorkbook } from '../src/sync/removals';
 import type { RemoveQueueRowIntent, WriteBackIntent } from '../src/domain/reconcile';
 
 const log = { debug() {}, info() {}, warn: vi.fn(), error() {} } as any;
-const tabFor = new Map([['Missing Info', 'Missing Info']]);
+const tabFor = new Map([['Missing Info - July', 'Missing Info - July']]);
 
 /**
  * A sheet that behaves like the workbook: deleting a row shifts everything below
@@ -42,7 +42,7 @@ function fakeWorkbook(rowsBySyncId: Record<number, string>) {
 const removal = (row: number, syncId: string, over: Partial<RemoveQueueRowIntent> = {}): RemoveQueueRowIntent => ({
   kind: 'remove-queue-row',
   syncId,
-  queueSheet: 'Missing Info',
+  queueSheet: 'Missing Info - July',
   queueRow: row,
   sourceSheet: 'July 30, 2026',
   sourceRow: 5,
@@ -69,9 +69,9 @@ describe('applying removals', () => {
     expect(result.deleted).toBe(3);
     expect(result.skipped).toBe(0);
     expect(calls.filter((c) => c.startsWith('delete'))).toEqual([
-      'delete Missing Info!12',
-      'delete Missing Info!11',
-      'delete Missing Info!10',
+      'delete Missing Info - July!12',
+      'delete Missing Info - July!11',
+      'delete Missing Info - July!10',
     ]);
     expect(remaining().size).toBe(0);
   });
@@ -102,7 +102,7 @@ describe('applying removals', () => {
       syncId: 'S000000000001',
       sourceSheet: 'July 30, 2026',
       sourceRow: 5,
-      queueSheet: 'Missing Info',
+      queueSheet: 'Missing Info - July',
       queueRow: 10,
       field: 'Phone Number',
       value: '845-555-1234',
@@ -113,7 +113,7 @@ describe('applying removals', () => {
     // The queue row is the only place that number exists until the write lands.
     expect(calls).toEqual([
       'write July 30, 2026!L5',
-      'delete Missing Info!10',
+      'delete Missing Info - July!10',
       'clear July 30, 2026!B5',
     ]);
   });
@@ -124,7 +124,7 @@ describe('applying removals', () => {
 
     // Clear-then-delete would strand the row: a blank column B makes the source
     // invisible to the reconciler, so nothing could ever remove the queue row.
-    expect(calls.indexOf('delete Missing Info!10')).toBeLessThan(
+    expect(calls.indexOf('delete Missing Info - July!10')).toBeLessThan(
       calls.indexOf('clear July 30, 2026!B5'),
     );
   });
@@ -142,7 +142,7 @@ describe('applying removals', () => {
     // Its column B already says the right thing. Blanking it would pull the
     // patient out of the queue they were just moved into.
     expect(result.cleared).toBe(0);
-    expect(calls).toEqual(['delete Missing Info!10']);
+    expect(calls).toEqual(['delete Missing Info - July!10']);
   });
 
   it('carries on past a row that moved, and still gets the others right', async () => {

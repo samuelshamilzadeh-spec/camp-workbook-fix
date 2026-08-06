@@ -4,6 +4,7 @@ import {
   REQUIRED_FIELDS,
   RESOLVED_DROPDOWN_VALUE,
   STYLE,
+  familyOf,
   queueColumnsFor,
   type QueueColumn,
   type WorkbookLayout,
@@ -344,7 +345,7 @@ export function planBlankRequiredShading(
   sheet: ParsedQueueSheet,
   layout: WorkbookLayout = LAYOUT,
 ): StyleOperation[] {
-  const required = REQUIRED_FIELDS[sheet.sheet];
+  const required = REQUIRED_FIELDS[familyOf(sheet.sheet)];
   if (required.length === 0) return [];
 
   const columns = queueColumnsFor(sheet.sheet);

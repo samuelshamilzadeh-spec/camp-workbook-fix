@@ -69,11 +69,11 @@ function queueRange(
 
 describe('the Resolved column', () => {
   it('is present on the work queues and absent from the append-only record', () => {
-    expect(queueColumnsFor('Missing Info')).toContain('Resolved');
+    expect(queueColumnsFor('Missing Info - July')).toContain('Resolved');
     expect(queueColumnsFor('United Refuah')).not.toContain('Resolved');
     // And it sits between Source Row and Last Name, which is what shifts the
     // rest of the sheet right.
-    expect(queueColumnsFor('Missing Info').slice(0, 4)).toEqual([
+    expect(queueColumnsFor('Missing Info - July').slice(0, 4)).toEqual([
       'Date of Visit',
       'Source Row',
       'Resolved',
@@ -111,8 +111,8 @@ describe('a row marked resolved', () => {
       daily: [daily()],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { resolved: 'Done', last: 'Smith', first: 'A', dob: '11/30/2009', phone: '555-1234', syncId: 'S000000000001' },
           ]),
         ),
@@ -124,7 +124,7 @@ describe('a row marked resolved', () => {
     expect(removals).toHaveLength(1);
     expect(removals[0]).toMatchObject({
       reason: 'resolved-on-queue',
-      queueSheet: 'Missing Info',
+      queueSheet: 'Missing Info - July',
       // Without these the applier cannot clear the status at source, and the
       // patient is re-appended on the next cycle.
       sourceSheet: '2026-07-30',
@@ -144,8 +144,8 @@ describe('a row marked resolved', () => {
       daily: [daily()],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { resolved: 'called mom', last: 'Smith', first: 'A', dob: '11/30/2009', phone: '555', syncId: 'S000000000001' },
           ]),
         ),
@@ -156,7 +156,7 @@ describe('a row marked resolved', () => {
     expect(plan.counts['remove-queue-row']).toBe(0);
     expect(plan.unrecognizedResolved).toEqual([
       {
-        queueSheet: 'Missing Info',
+        queueSheet: 'Missing Info - July',
         queueRow: 2,
         syncId: 'S000000000001',
         raw: 'called mom',
@@ -169,8 +169,8 @@ describe('a row marked resolved', () => {
       daily: [daily()],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { resolved: 'Done', last: 'Smith', first: 'A', dob: '11/30/2009', phone: '', syncId: 'S000000000001' },
           ]),
         ),
@@ -218,8 +218,8 @@ describe('dates', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { last: 'Smith', first: 'A', dob: 40147, phone: '555', syncId: 'S000000000001' },
           ]),
         ),
@@ -249,7 +249,7 @@ describe('the styling pass', () => {
 
   it('covers the full width of the destination, and no wider', () => {
     // 18 columns on a work queue, 17 on United Refuah.
-    expect(styled('Missing Info').operations[0]!.address).toBe('A1:R1');
+    expect(styled('Missing Info - July').operations[0]!.address).toBe('A1:R1');
     expect(styled('United Refuah').operations[0]!.address).toBe('A1:Q1');
   });
 
@@ -258,7 +258,7 @@ describe('the styling pass', () => {
     // deliberately absent: Graph 400s on `dataValidation` (even on a GET) and on
     // every spelling of `freezePanes` against this workbook. Both are manual
     // one-offs rather than calls that fail on every run. See src/domain/style.ts.
-    const kinds = new Set(styled('Missing Info').operations.map((op) => op.kind));
+    const kinds = new Set(styled('Missing Info - July').operations.map((op) => op.kind));
     expect([...kinds].sort()).toEqual([
       'border',
       'fill',
@@ -269,7 +269,7 @@ describe('the styling pass', () => {
   });
 
   it('formats both date columns and centres the Source Row', () => {
-    const operations = styled('Missing Info').operations;
+    const operations = styled('Missing Info - July').operations;
     const formats = operations.filter((op) => op.kind === 'number-format');
     expect(formats.map((op) => op.numberFormat?.format)).toEqual(['mm/dd/yyyy', 'mm/dd/yyyy']);
     expect(
@@ -280,7 +280,7 @@ describe('the styling pass', () => {
   });
 
   it('does not draw vertical lines', () => {
-    const edges = styled('Missing Info')
+    const edges = styled('Missing Info - July')
       .operations.filter((op) => op.kind === 'border')
       .map((op) => op.border?.edge);
     expect(edges).not.toContain('InsideVertical');
@@ -335,8 +335,8 @@ describe('a camp appearing for the first time', () => {
     // between banded ones, which is the moment a queue looks broken to somebody
     // reading it.
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [{ last: 'A', syncId: 'S000000000001' }]),
+      'Missing Info - July',
+      queueRange('Missing Info - July', [{ last: 'A', syncId: 'S000000000001' }]),
     );
     // Pretend row 2 is the divider for a brand new camp.
     const withGroup = { ...sheet, groups: [{ camp: 'Gevurah', headerRow: 2, declaredCount: 1, rows: [] }] };
@@ -350,8 +350,8 @@ describe('a camp appearing for the first time', () => {
     // Restyling all 35 camps on Not Accepted is a hundred Graph calls, which
     // does not belong in a five-second cycle.
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [{ last: 'A', syncId: 'S000000000001' }]),
+      'Missing Info - July',
+      queueRange('Missing Info - July', [{ last: 'A', syncId: 'S000000000001' }]),
     );
     const withGroups = {
       ...sheet,

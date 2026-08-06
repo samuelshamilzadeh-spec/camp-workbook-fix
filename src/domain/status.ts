@@ -9,11 +9,11 @@
  *   - multi-matches are logged, never resolved silently.
  */
 
-import type { QueueSheetName } from '../config';
+import type { QueueFamily } from '../config';
 
 export interface QueueKeyword {
   keyword: string;
-  destination: QueueSheetName;
+  destination: QueueFamily;
   /**
    * When set, this decides the match instead of plain containment.
    *
@@ -186,7 +186,7 @@ export type StatusOutcome =
   | { kind: 'ignored'; matched: string[] }
   /** Entered into an EMR successfully. */
   | { kind: 'terminal'; matched: string[] }
-  | { kind: 'queued'; destination: QueueSheetName; keyword: string; matched: string[] }
+  | { kind: 'queued'; destination: QueueFamily; keyword: string; matched: string[] }
   | { kind: 'unrecognized' };
 
 /**
@@ -282,7 +282,7 @@ export function isAmbiguous(outcome: StatusOutcome): boolean {
   const destinations = new Set(
     matched
       .map((k) => QUEUE_KEYWORDS.find((q) => q.keyword === k)?.destination)
-      .filter((d): d is QueueSheetName => d !== undefined),
+      .filter((d): d is QueueFamily => d !== undefined),
   );
 
   if (hasTerminal && destinations.size > 0) return true;
