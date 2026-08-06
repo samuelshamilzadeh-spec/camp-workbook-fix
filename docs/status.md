@@ -166,7 +166,21 @@ queue tabs that had been renamed, which is why the two split queues had a
 backlog and the three unrenamed ones had none. That asymmetry was visible in the
 data the whole time.
 
-**Do not trust this paragraph. Ask Azure.**
+**CONFIRMED LIVE 2026-08-06.** `syncTimer` is registered and enabled, the site
+is Running, and `SYNC_PHASE=4` with `SYNC_DRY_RUN=false` — it stamps, appends,
+writes back and removes. The package deployed on 2026-07-31 at 09:25:07 UTC,
+twenty minutes after the last of those deployment-fix commits. It has been
+running every five seconds ever since. The state blob
+`camp-sync-state/sync-state.json` advances every cycle and is the quickest pulse
+check there is.
+
+Republished 2026-08-06 19:51 UTC with the monthly split and the parenthesised
+tab names. Before that the running code predated the split entirely: it looked
+for tabs called `Missing Info` and `Ineligible & Inactive`, which had been
+renamed `... (old)` and hidden, so both queues were frozen while the other three
+kept flowing.
+
+**Do not trust a sentence in this file. Ask Azure.**
 
 ```bash
 az functionapp function list -g camp-workbook-sync -n camp-workbook-sync -o table
