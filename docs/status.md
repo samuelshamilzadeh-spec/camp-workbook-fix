@@ -143,13 +143,47 @@ Not started. Adding `Notes` shifts every column right on all five tabs again;
 `scripts/migrate-queue.ts` is now the tool for that and its guard is structural,
 so it can be pointed at the job.
 
-### Azure infrastructure — DEPLOYED 2026-07-31, code not yet published
+### Azure infrastructure — DEPLOYED 2026-07-31
 Resource group `camp-workbook-sync` in eastus holds all eight resources:
 Consumption plan, storage `ste24s24d74i4egcampworkb` with the state container,
 Log Analytics capped at 1 GB/day, Application Insights, the Function App, and a
 user-assigned managed identity.
 
-**The code has not been published to it and nothing runs on a timer yet.**
+**This section said "the code has not been published and nothing runs on a
+timer" and that line went stale nine minutes after it was written.** It was
+committed at 08:47 on 2026-07-31. The four commits that follow it — 08:56
+through 09:05 — are somebody deploying: no SCM log stream on Consumption, a
+deployment that registers zero functions without `EnableWorkerIndexing`,
+config-zip not working on Linux Consumption, and finally the fix that makes
+`func azure functionapp publish` work. Nobody came back and corrected this
+paragraph.
+
+On 2026-08-06 that cost real time. The office reported that a patient marked
+`ineligible` at source was not moving to the Ineligible queue, and this file was
+quoted back at them as proof that nothing could be moving anything, twice. The
+actual cause was the opposite: the timer WAS running and had gone blind on five
+queue tabs that had been renamed, which is why the two split queues had a
+backlog and the three unrenamed ones had none. That asymmetry was visible in the
+data the whole time.
+
+**Do not trust this paragraph. Ask Azure.**
+
+```bash
+az functionapp function list -g camp-workbook-sync -n camp-workbook-sync -o table
+```
+
+`syncTimer` in that list means it is live and running every five seconds.
+`SYNC_PHASE` and `SYNC_DRY_RUN` in the app settings say how much of a plan it
+applies. Those two commands are the truth; a sentence in a markdown file is a
+snapshot of what somebody believed at the time.
+
+**Publishing is manual.** The GitHub Actions workflow builds and tests on every
+push to `main` and has never once deployed — the `Sign in to Azure` step fails
+because the OIDC secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`) were never set on the repository, so `Deploy to the
+Function App` is skipped. **Merging to `main` does not ship anything.** Until
+those secrets exist, every config change — including a queue tab rename — needs
+`func azure functionapp publish` by hand or it never reaches the running job.
 
 The identity cannot reach the workbook until a Global Administrator assigns it
 `Files.ReadWrite.All` on Microsoft Graph — Bicep cannot do that. Until then the
