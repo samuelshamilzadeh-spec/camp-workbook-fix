@@ -91,7 +91,7 @@ describe('the cycle applier', () => {
         { status: 'missing info', camp: 'Achim', last: 'A', first: 'B', dob: '01/02/2010' },
       ])),
     ];
-    const queues = [parseQueueSheet('Missing Info', queueRange('Missing Info', []))];
+    const queues = [parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', []))];
     return { daily, queues, plan: reconcile({ daily, queues, newSyncId: () => 'S000000000001' }) };
   };
 
@@ -104,7 +104,7 @@ describe('the cycle applier', () => {
     expect(result.stamped).toBe(1);
     expect(result.appended).toBe(1);
     const stampAt = calls.findIndex((c) => c.startsWith('write July 30, 2026!BA'));
-    const appendAt = calls.findIndex((c) => c.startsWith('write Missing Info!A'));
+    const appendAt = calls.findIndex((c) => c.startsWith('write Missing Info - July!A'));
     expect(stampAt).toBeGreaterThanOrEqual(0);
     expect(stampAt).toBeLessThan(appendAt);
   });
@@ -177,7 +177,7 @@ describe('when a destination tab cannot be reached', () => {
       plan,
       daily,
       // Missing Info resolves this time.
-      queues: [...queues, parseQueueSheet('Missing Info', queueRange('Missing Info', []))],
+      queues: [...queues, parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', []))],
       tabFor,
       log,
     });

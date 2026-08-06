@@ -109,7 +109,7 @@ describe('detectQueueShape', () => {
 
   it('finds a header below a block of anything else', () => {
     const shape = detectQueueShape(
-      queueRange('Missing Info', [
+      queueRange('Missing Info - July', [
         ...Array.from({ length: 8 }, () => ({ kind: 'blank' }) as const),
         { kind: 'header' },
         { kind: 'row' },
@@ -119,7 +119,7 @@ describe('detectQueueShape', () => {
   });
 
   it('falls back to the configured layout when no header is recognizable', () => {
-    const shape = detectQueueShape(queueRange('Missing Info', [{ kind: 'blank' }]));
+    const shape = detectQueueShape(queueRange('Missing Info - July', [{ kind: 'blank' }]));
     expect(shape).toMatchObject({
       headerRow: LAYOUT.queue.headerRow,
       firstDataRow: LAYOUT.queue.firstDataRow,
@@ -249,8 +249,8 @@ describe('planQueueAppend on a populated tab', () => {
    */
   const populated = () =>
     parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         ...Array.from({ length: 8 }, () => ({ kind: 'blank' }) as const),
         { kind: 'header' },
         { kind: 'divider', camp: 'Achim', count: 2 },
@@ -276,7 +276,7 @@ describe('planQueueAppend on a populated tab', () => {
   it('inserts into an existing camp block and updates its divider', () => {
     const plan = planQueueAppend({
       sheet: populated(),
-      appends: [intent('Missing Info', 'Achim')],
+      appends: [intent('Missing Info - July', 'Achim')],
     });
 
     expect(inserts(plan.operations)).toEqual([
@@ -297,9 +297,9 @@ describe('planQueueAppend on a populated tab', () => {
     const plan = planQueueAppend({
       sheet: populated(),
       appends: [
-        intent('Missing Info', 'Achim'),
-        intent('Missing Info', 'Bnos Naale'),
-        intent('Missing Info', 'Chayeinu'),
+        intent('Missing Info - July', 'Achim'),
+        intent('Missing Info - July', 'Bnos Naale'),
+        intent('Missing Info - July', 'Chayeinu'),
       ],
     });
 
@@ -312,7 +312,7 @@ describe('planQueueAppend on a populated tab', () => {
   it('does not let a new camp and the last existing camp collide on one row', () => {
     const plan = planQueueAppend({
       sheet: populated(),
-      appends: [intent('Missing Info', 'Chayeinu'), intent('Missing Info', 'Bnos Naale')],
+      appends: [intent('Missing Info - July', 'Chayeinu'), intent('Missing Info - July', 'Bnos Naale')],
     });
 
     // Both want row 15. The new camp is written there first, then Bnos Naale
@@ -325,7 +325,7 @@ describe('planQueueAppend on a populated tab', () => {
   it('rewrites the existing TOTAL before anything shifts it', () => {
     const plan = planQueueAppend({
       sheet: populated(),
-      appends: [intent('Missing Info', 'Achim')],
+      appends: [intent('Missing Info - July', 'Achim')],
     });
     expect(plan.operations[0]).toMatchObject({ purpose: 'total', row: 15 });
   });
@@ -423,7 +423,7 @@ describe('applying a plan to a sheet', () => {
   });
 
   it('keeps existing rows intact and their SyncIDs aligned when inserting', () => {
-    const before = queueRange('Missing Info', [
+    const before = queueRange('Missing Info - July', [
       ...Array.from({ length: 8 }, () => ({ kind: 'blank' }) as const),
       { kind: 'header' },
       { kind: 'divider', camp: 'Achim', count: 2 },
@@ -435,13 +435,13 @@ describe('applying a plan to a sheet', () => {
     ]);
 
     const appends = [
-      intent('Missing Info', 'Achim'),
-      intent('Missing Info', 'Bnos Naale'),
-      intent('Missing Info', 'Chayeinu'),
-      intent('Missing Info', 'Chayeinu'),
+      intent('Missing Info - July', 'Achim'),
+      intent('Missing Info - July', 'Bnos Naale'),
+      intent('Missing Info - July', 'Chayeinu'),
+      intent('Missing Info - July', 'Chayeinu'),
     ];
-    const plan = planQueueAppend({ sheet: parseQueueSheet('Missing Info', before), appends });
-    const after = parseQueueSheet('Missing Info', applyPlan('Missing Info', before, plan.operations));
+    const plan = planQueueAppend({ sheet: parseQueueSheet('Missing Info - July', before), appends });
+    const after = parseQueueSheet('Missing Info - July', applyPlan('Missing Info - July', before, plan.operations));
 
     expect(after.groups.map((group) => [group.camp, group.declaredCount, group.rows.length])).toEqual([
       ['Achim', 3, 3],
@@ -487,8 +487,8 @@ describe('blank required fields', () => {
 
   it('shades contiguous columns as one range', () => {
     const plan = planQueueAppend({
-      sheet: parseQueueSheet('Missing Info', queueRange('Missing Info', [{ kind: 'header' }])),
-      appends: [intent('Missing Info', 'Achim', { blankRequired })],
+      sheet: parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [{ kind: 'header' }])),
+      appends: [intent('Missing Info - July', 'Achim', { blankRequired })],
     });
 
     const shades = plan.operations.filter((op) => op.kind === 'shade');
@@ -514,8 +514,8 @@ describe('planCountRefresh', () => {
     // part of the design, so a bare name is treated as a divider declaring zero
     // and rewritten with what the block actually holds.
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'header' },
         { kind: 'divider', camp: 'Achim', count: 0 },
         { kind: 'row' },
@@ -531,8 +531,8 @@ describe('planCountRefresh', () => {
 
   it('adds a TOTAL below the body when the tab has none', () => {
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'header' },
         { kind: 'divider', camp: 'Achim', count: 1 },
         { kind: 'row' },
@@ -546,8 +546,8 @@ describe('planCountRefresh', () => {
 
   it('plans nothing on a sheet whose counts are already right', () => {
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'header' },
         { kind: 'divider', camp: 'Achim', count: 1 },
         { kind: 'row' },
@@ -568,8 +568,8 @@ describe('a TOTAL line that is not at the bottom', () => {
    */
   const awkward = () =>
     parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'header' },
         { kind: 'divider', camp: 'Achim', count: 2 },
         { kind: 'row', last: 'Existing-A1', syncId: 'S000000000901' },
@@ -583,7 +583,7 @@ describe('a TOTAL line that is not at the bottom', () => {
   it('puts a new camp below every existing block, not above one', () => {
     const plan = planQueueAppend({
       sheet: awkward(),
-      appends: [intent('Missing Info', 'Bnos'), intent('Missing Info', 'Zed')],
+      appends: [intent('Missing Info - July', 'Bnos'), intent('Missing Info - July', 'Zed')],
     });
 
     const rows = inserts(plan.operations).map((op) => op.row);
@@ -592,7 +592,7 @@ describe('a TOTAL line that is not at the bottom', () => {
   });
 
   it('survives being applied, with every existing row keeping its own SyncID', () => {
-    const before = queueRange('Missing Info', [
+    const before = queueRange('Missing Info - July', [
       { kind: 'header' },
       { kind: 'divider', camp: 'Achim', count: 2 },
       { kind: 'row', last: 'Existing-A1', syncId: 'S000000000901' },
@@ -601,9 +601,9 @@ describe('a TOTAL line that is not at the bottom', () => {
       { kind: 'divider', camp: 'Bnos', count: 1 },
       { kind: 'row', last: 'Existing-B1', syncId: 'S000000000903' },
     ]);
-    const appends = [intent('Missing Info', 'Bnos'), intent('Missing Info', 'Zed')];
-    const plan = planQueueAppend({ sheet: parseQueueSheet('Missing Info', before), appends });
-    const after = parseQueueSheet('Missing Info', applyPlan('Missing Info', before, plan.operations));
+    const appends = [intent('Missing Info - July', 'Bnos'), intent('Missing Info - July', 'Zed')];
+    const plan = planQueueAppend({ sheet: parseQueueSheet('Missing Info - July', before), appends });
+    const after = parseQueueSheet('Missing Info - July', applyPlan('Missing Info - July', before, plan.operations));
 
     expect(after.rows).toHaveLength(5);
     for (const row of after.rows) {
@@ -623,8 +623,8 @@ describe('camp names spelled with stray whitespace', () => {
     // A divider typed with a doubled space still keys to the same camp as its
     // own patients, whose camp cell went through normalizeCamp.
     const sheet = parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'header' },
         { kind: 'divider', camp: 'Bnos  Naale', count: 1 },
         { kind: 'row', syncId: 'S000000000901' },
@@ -632,7 +632,7 @@ describe('camp names spelled with stray whitespace', () => {
     );
     const plan = planQueueAppend({
       sheet,
-      appends: [intent('Missing Info', 'Bnos Naale')],
+      appends: [intent('Missing Info - July', 'Bnos Naale')],
     });
     expect(plan.placements).toHaveLength(1);
     expect(plan.placements[0]).toMatchObject({ isNew: false, camp: 'Bnos  Naale', added: 1 });

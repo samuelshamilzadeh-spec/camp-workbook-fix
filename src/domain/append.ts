@@ -113,6 +113,19 @@ export interface PlanQueueAppendInput {
   sheet: ParsedQueueSheet;
   appends: readonly AppendQueueRowIntent[];
   layout?: WorkbookLayout;
+  /**
+   * Where a brand new camp block goes relative to the other new ones.
+   *
+   * `alphabetical` is the default and the right answer for a cycle: it is stable
+   * across runs and needs no knowledge of how the office ordered the tab.
+   *
+   * `as-given` exists for the split migration, which is moving a tab the office
+   * already ordered. Every camp on it is "new" to the destination, so
+   * alphabetising would silently reorder the whole sheet — on a job whose entire
+   * premise is that the rows arrive exactly as they left. The caller passes the
+   * intents in the order the source tab held them and gets that order back.
+   */
+  newBlockOrder?: 'alphabetical' | 'as-given';
 }
 
 /**
@@ -241,9 +254,13 @@ export function planQueueAppend(input: PlanQueueAppendInput): QueueAppendPlan {
   // plan's to choose: alphabetical, which is stable across runs and needs no
   // knowledge of how the office ordered the tab. Camps already on the sheet keep
   // their place and are never reordered.
-  const newBlocks = blocks
-    .filter((block) => block.isNew)
-    .sort((a, b) => a.campKey.localeCompare(b.campKey));
+  //
+  // `as-given` keeps the caller's order instead — see `newBlockOrder`. `byCamp`
+  // is a Map, so the intents' own order survives to here.
+  const newBlocks = blocks.filter((block) => block.isNew);
+  if ((input.newBlockOrder ?? 'alphabetical') === 'alphabetical') {
+    newBlocks.sort((a, b) => a.campKey.localeCompare(b.campKey));
+  }
   // Deepest first, so each insert only moves rows that have already been dealt
   // with.
   const grownBlocks = blocks

@@ -1,9 +1,11 @@
 import {
-  APPEND_ONLY_DESTINATIONS,
   LAYOUT,
   QUEUE_ONLY_COLUMNS,
   REQUIRED_FIELDS,
+  familyOf,
+  isAppendOnly,
   type QueueColumn,
+  type QueueFamily,
   type QueueSheetName,
   type WorkbookLayout,
 } from '../config';
@@ -11,6 +13,7 @@ import { isBlank } from './cells';
 import { identityKey } from './adopt';
 import { repairForWrite, sameMeaning } from './compare';
 import { campKey, type DailyRow, type ParsedDailySheet } from './dailySheets';
+import { queueSheetFor } from './segments';
 import type { ParsedQueueSheet, QueueRow } from './queueSheets';
 
 /**
@@ -84,7 +87,12 @@ export interface AmbiguityReport {
   row: number;
   syncId: string | undefined;
   matched: string[];
-  destination: QueueSheetName | 'terminal';
+  /**
+   * The FAMILY the keywords disagreed about, not the tab. An ambiguity is about
+   * what the status says, and reporting `Missing Info - July` would imply the
+   * month were part of the disagreement when it never is.
+   */
+  destination: QueueFamily | 'terminal';
 }
 
 export interface OrphanReport {
@@ -282,12 +290,28 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     }
   }
 
+  /**
+   * The tab a source row belongs on: its keyword's family, plus its month for
+   * the two split queues.
+   *
+   * Computed in one place and used by both the append path and the wrong-queue
+   * check below. Those two must agree exactly — one deciding `Missing Info - July`
+   * while the other decides `Missing Info - June` would remove the row from one
+   * tab and append it to the other on every cycle, forever.
+   *
+   * The month comes from the daily sheet's own NAME, which is the visit date and
+   * the thing this row is a record of. Not from the queue row's `Date of Visit`
+   * cell, which is a copy of it and could have been edited.
+   */
+  const destinationFor = (row: DailyRow, family: QueueFamily): QueueSheetName =>
+    queueSheetFor(family, row.sheet, layout);
+
   // --- 1. New rows entering a queue -----------------------------------------
   for (const row of pendingStamps) {
     if (row.outcome.kind !== 'queued') continue;
     const syncId = input.newSyncId();
     intents.push({ kind: 'stamp-id', sheet: row.sheet, row: row.row, syncId });
-    intents.push(buildAppend(row, syncId, row.outcome.destination));
+    intents.push(buildAppend(row, syncId, destinationFor(row, row.outcome.destination)));
   }
 
   /**
@@ -301,7 +325,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
   function pushWriteBacks(queueRow: QueueRow, dailyRow: DailyRow, syncId: string): void {
     // An append-only record never sends anything back. The office confirmed a
     // United Refuah row is copied across and then never changes.
-    if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) return;
+    if (isAppendOnly(queueRow.sheet)) return;
 
     // NOTHING IS WRITTEN TO A DAILY SHEET WITHOUT A HUMAN SAYING SO.
     //
@@ -406,7 +430,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     };
 
     if (dailyRow.outcome.kind === 'queued') {
-      const destination = dailyRow.outcome.destination;
+      const destination = destinationFor(dailyRow, dailyRow.outcome.destination);
       const onDestination = queueRows.filter((row) => row.sheet === destination);
 
       // Any row on a queue this patient no longer belongs to goes, whether or
@@ -419,6 +443,12 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       // both sides of a move leaves the patient on no queue at all. Nine rows on
       // Missing Info were in exactly this state, their column B reading
       // `no insurance` and `incorrect insurance`, which route elsewhere.
+      //
+      // Since the split, "somewhere else" can also mean the same queue in a
+      // different month — a `Missing Info` row sitting on the June tab for a
+      // July visit. It is the same move and takes the same path, which is the
+      // point of routing through one `destinationFor`: the month is part of the
+      // destination, so nothing here needs a second notion of "wrong tab".
       for (const row of queueRows) {
         if (row.sheet === destination) continue;
 
@@ -482,7 +512,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       // An append-only destination is a record, not a work queue: the office
       // confirmed a United Refuah row is copied across and then never changes,
       // and nothing is ever sent back to the daily sheet.
-      if (APPEND_ONLY_DESTINATIONS.includes(destination)) continue;
+      if (isAppendOnly(destination)) continue;
 
       // Same queue: reconcile field values. A staff edit on the queue sheet is
       // authoritative and gets copied back to the daily sheet. The Resolved
@@ -571,7 +601,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     // the whole row blanked — because it cannot misfire, whereas keying deletion
     // off a single column would delete rows on a stray backspace.
     for (const queueRow of queueRows) {
-      if (APPEND_ONLY_DESTINATIONS.includes(queueRow.sheet)) continue;
+      if (isAppendOnly(queueRow.sheet)) continue;
       if (!rowLooksCleared(queueRow)) continue;
 
       // Section 2 may already have removed this exact row — a patient who moved
@@ -626,7 +656,9 @@ function buildAppend(
   // left the column holding two different things.
   values['Source Row'] = row.row;
 
-  const blankRequired = REQUIRED_FIELDS[destination].filter((field) =>
+  // Keyed by family: what a Missing Info row needs filled in does not depend on
+  // which month's tab it lands on.
+  const blankRequired = REQUIRED_FIELDS[familyOf(destination)].filter((field) =>
     isBlank(values[field]),
   );
 

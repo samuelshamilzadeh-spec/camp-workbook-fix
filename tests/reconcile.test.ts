@@ -118,7 +118,7 @@ describe('reconcile', () => {
 
     const plan = reconcile({
       daily: [daily],
-      queues: [parseQueueSheet('Missing Info', queueRange('Missing Info', []))],
+      queues: [parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', []))],
       newSyncId: sequentialIds(),
     });
 
@@ -129,7 +129,7 @@ describe('reconcile', () => {
     const append = plan.intents.find(
       (i): i is AppendQueueRowIntent => i.kind === 'append-queue-row',
     )!;
-    expect(append.destination).toBe('Missing Info');
+    expect(append.destination).toBe('Missing Info - July');
     expect(append.camp).toBe('Camp Ramah');
     expect(append.values['Date of Visit']).toBe('2026-07-30');
     // A plain row number: `planAdoption` reads this cell with `Number()`, and
@@ -147,8 +147,8 @@ describe('reconcile', () => {
       daily: [parseDailySheet('2026-07-30', dailyRange('2026-07-30', [stamped]))],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'header', camp: 'Camp Ramah', count: 1 },
             {
               kind: 'row',
@@ -181,8 +181,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
           ]),
         ),
@@ -206,8 +206,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             {
               kind: 'row',
               dateOfVisit: '2026-07-30',
@@ -251,8 +251,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
           ]),
         ),
@@ -279,8 +279,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
           ]),
         ),
@@ -309,8 +309,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [{ kind: 'row', syncId: 'S000000000001' }]),
+          'Missing Info - July',
+          queueRange('Missing Info - July', [{ kind: 'row', syncId: 'S000000000001' }]),
         ),
       ],
       newSyncId: sequentialIds(),
@@ -350,8 +350,8 @@ describe('reconcile', () => {
         ),
         // Parsed after, and under the old rule this one overwrote the row above.
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
           ]),
         ),
@@ -364,7 +364,7 @@ describe('reconcile', () => {
     const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
     expect(removals).toHaveLength(1);
     expect(removals[0]).toMatchObject({
-      queueSheet: 'Missing Info',
+      queueSheet: 'Missing Info - July',
       // Still queued, just on the wrong tab — distinct from being finished.
       reason: 'wrong-queue',
     });
@@ -382,8 +382,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', phone: '555', syncId: 'S000000000001' },
           ]),
@@ -396,7 +396,7 @@ describe('reconcile', () => {
     expect(plan.counts['remove-queue-row']).toBe(0);
     expect(plan.orphans).toEqual([
       {
-        queueSheet: 'Missing Info',
+        queueSheet: 'Missing Info - July',
         queueRow: LAYOUT.queue.firstDataRow + 1,
         syncId: 'S000000000001',
         reason: 'duplicate-sync-id',
@@ -420,8 +420,8 @@ describe('reconcile', () => {
           queueRange('Verify Insurance', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
         ),
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
+          'Missing Info - July',
+          queueRange('Missing Info - July', [{ kind: 'row', last: 'A', syncId: 'S000000000001' }]),
         ),
       ],
       newSyncId: sequentialIds(),
@@ -445,8 +445,8 @@ describe('reconcile', () => {
       ],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', syncId: 'S000000000001' },
           ]),
         ),
@@ -462,8 +462,8 @@ describe('reconcile', () => {
       daily: [parseDailySheet('2026-07-30', dailyRange('2026-07-30', []))],
       queues: [
         parseQueueSheet(
-          'Missing Info',
-          queueRange('Missing Info', [
+          'Missing Info - July',
+          queueRange('Missing Info - July', [
             { kind: 'row', dateOfVisit: '2026-06-01', last: 'A', syncId: 'S000000000009' },
           ]),
         ),
@@ -474,7 +474,7 @@ describe('reconcile', () => {
     expect(plan.intents).toHaveLength(0);
     expect(plan.orphans).toEqual([
       {
-        queueSheet: 'Missing Info',
+        queueSheet: 'Missing Info - July',
         // The helper lays the data out straight after the header row, so this
         // follows the configured layout rather than pinning a number.
         queueRow: LAYOUT.queue.firstDataRow,
@@ -494,7 +494,7 @@ describe('reconcile', () => {
           ]),
         ),
       ],
-      queues: [parseQueueSheet('Missing Info', queueRange('Missing Info', []))],
+      queues: [parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', []))],
       newSyncId: sequentialIds(),
     });
 
@@ -502,6 +502,8 @@ describe('reconcile', () => {
     expect(plan.ambiguous[0]).toMatchObject({
       sheet: '2026-07-30',
       row: 2,
+      // The FAMILY, not the tab. These keywords disagree about which queue the
+      // patient belongs in, never about which month they were seen.
       destination: 'Missing Info',
     });
     // Flagged, but still routed — never dropped on the floor.
@@ -521,7 +523,7 @@ describe('reconcile', () => {
           ),
         ],
         queues: [
-          parseQueueSheet('Missing Info', queueRange('Missing Info', [])),
+          parseQueueSheet('Missing Info - July', queueRange('Missing Info - July', [])),
           parseQueueSheet('Not Accepted', queueRange('Not Accepted', [])),
         ],
         newSyncId: sequentialIds(),
@@ -542,8 +544,8 @@ describe('wrong queue versus finished', () => {
 
   const onMissingInfo = () =>
     parseQueueSheet(
-      'Missing Info',
-      queueRange('Missing Info', [
+      'Missing Info - July',
+      queueRange('Missing Info - July', [
         { kind: 'row', dateOfVisit: '2026-07-30', last: 'A', first: 'B', dob: 'x', phone: '1', syncId: 'S000000000001' },
       ]),
     );
@@ -558,7 +560,7 @@ describe('wrong queue versus finished', () => {
 
     const removals = plan.intents.filter((i) => i.kind === 'remove-queue-row');
     expect(removals).toHaveLength(1);
-    expect(removals[0]).toMatchObject({ queueSheet: 'Missing Info', reason: 'wrong-queue' });
+    expect(removals[0]).toMatchObject({ queueSheet: 'Missing Info - July', reason: 'wrong-queue' });
 
     // And the replacement row is planned in the same breath. An applier that
     // honours the removal without the append leaves the patient on no queue.

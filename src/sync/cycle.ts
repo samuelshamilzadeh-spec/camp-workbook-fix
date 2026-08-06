@@ -10,6 +10,7 @@ import { mapWithConcurrency } from '../domain/concurrency';
 import { parseDailySheet, planScan } from '../domain/dailySheets';
 import {
   parseQueueSheet,
+  assertQueueTabNamesFit,
   assertSyncIdColumnIsClear,
   resolveSheetName,
 } from '../domain/queueSheets';
@@ -77,6 +78,7 @@ export async function runCycle(deps: CycleDeps): Promise<CycleResult> {
   }
 
   assertSyncIdColumnIsClear();
+  assertQueueTabNamesFit();
 
   // Read-only work uses a non-persisted session: faster than session-less calls
   // and structurally incapable of modifying the file.

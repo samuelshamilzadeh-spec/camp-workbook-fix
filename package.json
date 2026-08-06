@@ -25,6 +25,7 @@
     "adopt:apply": "tsx scripts/adopt-apply.ts",
     "append": "tsx scripts/append-queue.ts",
     "migrate": "tsx scripts/migrate-queue.ts",
+    "split": "tsx scripts/split-queue.ts",
     "resolve-rows": "tsx scripts/resolve-queue.ts",
     "concurrency-test": "tsx scripts/concurrency-test.ts"
   },

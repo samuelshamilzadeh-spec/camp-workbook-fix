@@ -13,14 +13,22 @@ import { join } from 'node:path';
  * check impossible to forget.
  */
 
-export type QueueSheetName =
+/**
+ * The queue a column B keyword routes to. NOT necessarily a tab.
+ *
+ * A family answers "what kind of problem is this row", which is the only thing
+ * a status keyword can tell us. Which physical tab the row lands on is a second
+ * question — see `QueueSheetName` — and keeping the two apart is what lets a
+ * queue be split without every keyword rule having to know about it.
+ */
+export type QueueFamily =
   | 'Verify Insurance'
   | 'Missing Info'
   | 'Not Accepted'
   | 'Ineligible & Inactive'
   | 'United Refuah';
 
-export const QUEUE_SHEET_NAMES: readonly QueueSheetName[] = [
+export const QUEUE_FAMILIES: readonly QueueFamily[] = [
   'Verify Insurance',
   'Missing Info',
   'Not Accepted',
@@ -29,7 +37,135 @@ export const QUEUE_SHEET_NAMES: readonly QueueSheetName[] = [
 ] as const;
 
 /**
- * Destinations whose rows are append-only: copied across once and then never
+ * Families the office asked to see one month at a time, each split across a tab
+ * per month of the season plus one for everything else.
+ *
+ * The other three stay as single tabs. Nothing about the split is inherent to
+ * these two — adding a third is this list plus creating its tabs — but it is a
+ * deliberate choice per queue rather than a global mode, because a tab that
+ * holds 85 append-only records gains nothing from being cut into four.
+ */
+export type SplitFamily = 'Missing Info' | 'Ineligible & Inactive';
+
+export const SPLIT_FAMILIES: readonly SplitFamily[] = [
+  'Missing Info',
+  'Ineligible & Inactive',
+] as const;
+
+export function isSplitFamily(family: QueueFamily): family is SplitFamily {
+  return (SPLIT_FAMILIES as readonly string[]).includes(family);
+}
+
+/**
+ * Where a row goes when its visit date is not one of the months below, or is not
+ * a date at all.
+ *
+ * There is always somewhere to put a row. A patient whose `Date of Visit` will
+ * not parse — the workbook has at least one — must not fall out of the system
+ * because the month could not be worked out; they land in a visible pile
+ * somebody can clear instead.
+ */
+export const OTHER_SEGMENT = 'Other';
+
+/**
+ * The months the season is cut into, in tab order.
+ *
+ * This table drives everything: the tab names, the routing, and what the
+ * migration creates. Adding September is an entry here plus running
+ * `npm run split` again.
+ *
+ * TWO CONSTRAINTS on any name added here.
+ *
+ * Excel caps a sheet name at 31 characters, and `Ineligible & Inactive` is
+ * already 21 of them. `Ineligible & Inactive - August` fits at 30;
+ * `- September` would not, and would have to be abbreviated.
+ *
+ * And the segment is the MONTH ONLY, with no year. That is right for a workbook
+ * holding one camp season and wrong the moment a second one is added, when a
+ * July 2027 visit would land on the same tab as a July 2026 one. A second season
+ * needs the year in these names.
+ */
+export const MONTH_SEGMENTS: readonly { segment: Segment; month: number }[] = [
+  { segment: 'June', month: 6 },
+  { segment: 'July', month: 7 },
+  { segment: 'August', month: 8 },
+] as const;
+
+/**
+ * A month name from the table above, or `Other`.
+ *
+ * Listed separately from `MONTH_SEGMENTS` on purpose: adding a month to that
+ * table without adding it here fails to compile, so the tab names and the type
+ * cannot drift apart.
+ */
+export type Segment = 'June' | 'July' | 'August' | typeof OTHER_SEGMENT;
+
+export const SEGMENTS: readonly Segment[] = [
+  ...MONTH_SEGMENTS.map((entry) => entry.segment),
+  OTHER_SEGMENT,
+];
+
+/**
+ * What separates a family from its segment in a tab name. Chosen because no
+ * family name contains it, so `familyOf` can split on it without ambiguity —
+ * `Ineligible & Inactive` has an ampersand but no ` - `.
+ */
+export const SEGMENT_SEPARATOR = ' - ';
+
+/**
+ * A physical queue tab.
+ *
+ * For an unsplit family this is just the family name. For a split one it is
+ * `Missing Info - July`: the family, the separator, the segment.
+ */
+export type QueueSheetName =
+  | Exclude<QueueFamily, SplitFamily>
+  | `${SplitFamily}${typeof SEGMENT_SEPARATOR}${Segment}`;
+
+export function queueTabFor(family: QueueFamily, segment: Segment | undefined): QueueSheetName {
+  return (
+    segment === undefined ? family : `${family}${SEGMENT_SEPARATOR}${segment}`
+  ) as QueueSheetName;
+}
+
+/**
+ * The family a tab belongs to. A tab with no segment is its own family.
+ *
+ * Throws rather than returning a plausible-looking string, because the result is
+ * used as a key into `REQUIRED_FIELDS`. A wrong answer there does not fail — it
+ * returns `undefined`, and the next line asks it for `.filter`, which is a
+ * TypeError several frames from the actual mistake. Naming the bad tab here is
+ * the difference between a five-second fix and an afternoon.
+ */
+export function familyOf(sheet: QueueSheetName): QueueFamily {
+  const at = sheet.indexOf(SEGMENT_SEPARATOR);
+  const family = (at === -1 ? sheet : sheet.slice(0, at)) as QueueFamily;
+  if (!QUEUE_FAMILIES.includes(family)) {
+    throw new Error(
+      `"${sheet}" does not name a queue: "${family}" is not one of ` +
+        QUEUE_FAMILIES.map((name) => `"${name}"`).join(', '),
+    );
+  }
+  return family;
+}
+
+/** The segment part of a tab name, or undefined for an unsplit family's tab. */
+export function segmentOf(sheet: QueueSheetName): Segment | undefined {
+  const at = sheet.indexOf(SEGMENT_SEPARATOR);
+  return at === -1
+    ? undefined
+    : (sheet.slice(at + SEGMENT_SEPARATOR.length) as Segment);
+}
+
+/** Every tab a queue row can live on: three unsplit, plus four per split family. */
+export const QUEUE_SHEET_NAMES: readonly QueueSheetName[] = QUEUE_FAMILIES.flatMap((family) =>
+  isSplitFamily(family)
+    ? SEGMENTS.map((segment) => queueTabFor(family, segment))
+    : [queueTabFor(family, undefined)],
+);
+
+/**
+ * Families whose rows are append-only: copied across once and then never
  * touched again.
  *
  * The office confirmed United Refuah works this way — a row lands there and no
@@ -37,7 +173,12 @@ export const QUEUE_SHEET_NAMES: readonly QueueSheetName[] = [
  * remove are both suppressed for it, and it is the reason those behaviours are
  * per-destination rather than global.
  */
-export const APPEND_ONLY_DESTINATIONS: readonly QueueSheetName[] = ['United Refuah'] as const;
+export const APPEND_ONLY_DESTINATIONS: readonly QueueFamily[] = ['United Refuah'] as const;
+
+/** Append-only is a property of the queue, so it holds for every tab of it. */
+export function isAppendOnly(sheet: QueueSheetName): boolean {
+  return APPEND_ONLY_DESTINATIONS.includes(familyOf(sheet));
+}
 
 /**
  * Where each queue lives in the live workbook, verified 2026-07-30.
@@ -53,13 +194,24 @@ export const APPEND_ONLY_DESTINATIONS: readonly QueueSheetName[] = ['United Refu
  */
 export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
   'Verify Insurance': 'Verify Insurance',
-  'Missing Info': 'Missing Info',
   'Not Accepted': 'Not Accepted',
-  'Ineligible & Inactive': 'Ineligible & Inactive',
   // The original tab was renamed `United Refuah (old)` and hidden; a fresh one
   // was created under the canonical name on 2026-07-30 and is empty. It is the
   // first target for Phase 2b: 85 rows, append-only, no inserts needed.
   'United Refuah': 'United Refuah',
+
+  // The two split queues. `Missing Info` and `Ineligible & Inactive` used to be
+  // one tab each; `npm run split` moved their rows onto these and renamed the
+  // originals `(old)`, which is why those two names appear in IGNORED_TABS
+  // below rather than here.
+  'Missing Info - June': 'Missing Info - June',
+  'Missing Info - July': 'Missing Info - July',
+  'Missing Info - August': 'Missing Info - August',
+  'Missing Info - Other': 'Missing Info - Other',
+  'Ineligible & Inactive - June': 'Ineligible & Inactive - June',
+  'Ineligible & Inactive - July': 'Ineligible & Inactive - July',
+  'Ineligible & Inactive - August': 'Ineligible & Inactive - August',
+  'Ineligible & Inactive - Other': 'Ineligible & Inactive - Other',
 };
 
 /**
@@ -72,6 +224,11 @@ export const IGNORED_TABS: readonly string[] = [
   'United Refuah (old)',
   'Dont Take Ins (old)',
   'Missing Ins info',
+  // The single-tab forms of the two split queues, kept intact and hidden by
+  // `npm run split` rather than deleted. They still hold every row as it stood
+  // before the split, which is the only copy of that state.
+  'Missing Info (old)',
+  'Ineligible & Inactive (old)',
   // Historical.
   'Missing info 25',
   '2025 Archive',
@@ -127,7 +284,7 @@ export type QueueColumn = (typeof QUEUE_COLUMNS)[number];
  * `scripts/migrate-queue.ts`.
  */
 export function queueColumnsFor(destination: QueueSheetName): readonly QueueColumn[] {
-  return APPEND_ONLY_DESTINATIONS.includes(destination)
+  return isAppendOnly(destination)
     ? QUEUE_COLUMNS.filter((column) => column !== 'Resolved')
     : QUEUE_COLUMNS;
 }
@@ -225,8 +382,12 @@ export interface WorkbookLayout {
  * The brief asks whether "required" differs per status. It plausibly does — a
  * Missing Info row is by definition missing something — so this is modelled per
  * status from the start, currently with an identical set. UNVERIFIED.
+ *
+ * Keyed by FAMILY, not by tab. What a row needs filled in is a property of why
+ * it is queued, and cutting Missing Info into months does not change what makes
+ * a Missing Info row incomplete.
  */
-export const REQUIRED_FIELDS: Record<QueueSheetName, readonly QueueColumn[]> = {
+export const REQUIRED_FIELDS: Record<QueueFamily, readonly QueueColumn[]> = {
   'Verify Insurance': [
     'Last Name',
     'First Name',
@@ -375,8 +536,21 @@ export const LAYOUT: WorkbookLayout = {
     'Missing Ins info',
     'Missing Info',
     'Missing Info (New)',
+    'Missing Info (old)',
     'Not Accepted ',
     'Ineligible & Inactive',
+    'Ineligible & Inactive (old)',
+    // The monthly tabs. `dailySheetPattern` requires the WHOLE name to be a
+    // date so none of these could match it anyway, but a queue tab silently
+    // scanned as a daily sheet would be a bad enough failure to list them.
+    'Missing Info - June',
+    'Missing Info - July',
+    'Missing Info - August',
+    'Missing Info - Other',
+    'Ineligible & Inactive - June',
+    'Ineligible & Inactive - July',
+    'Ineligible & Inactive - August',
+    'Ineligible & Inactive - Other',
   ],
   // VERIFIED 2026-07-30: sheets are named `July 30, 2026` — long month name,
   // no leading zero on the day, comma before the year. The ISO and US numeric
