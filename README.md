@@ -117,13 +117,35 @@ A few consequences worth knowing:
   `MONTH_SEGMENTS`, which also carries the 31-character limit Excel puts on a
   sheet name (`Ineligible & Inactive - September` does not fit).
 
-`npm run split -- "Missing Info"` performs the migration. It audits the source
-tab's fills against the style rules first and **refuses to write if it finds a
-colour the rules cannot regenerate**, because the new tabs are styled by
-re-deriving rather than by copying cell formats. It is idempotent, verifies every
-row landed before it reports success, and never deletes anything: `--archive`
-renames the original to `Missing Info (old)` and hides it, still holding every row
-exactly as it stood.
+`npm run split -- "Missing Info"` performs the migration, and **it copies the
+colours rather than re-deriving them**. That distinction was not obvious and cost
+a rewrite. The first version regenerated fills from `REQUIRED_FIELDS` and
+`planQueueStyle`, reasoning that every fill on these tabs came from those rules.
+Auditing the live tab disproved it: `Missing Info` carries **17 distinct fill
+colours**, only four of which this codebase knows about. Amber and yellow in
+`Date of Visit`, blues in `Source Row`, red note-cells reading `Staff kid` and
+`Not in campminder`, greens for confirmed insurance, solid orange down
+`Medications` and purple down `Allergies` — a colour-coding system staff built by
+hand. Regenerating would have erased all of it. Font colour is copied too, for
+the same reason: a `Medicaid #` reading `inactive` in red is somebody saying
+something, and the house style paints the body black.
+
+So the script reads every cell's fill and font colour off the source, moves the
+rows, and replays those colours onto the row each patient landed on. Nothing is
+added — a blank required field that nobody shaded stays unshaded. `planQueueStyle`
+still supplies fonts, borders, column widths and number formats, which it
+reproduces exactly; only its fill operations are dropped.
+
+Excel's own copy would be better than any of this, and Graph refuses it. Both
+`worksheets/copy` and `range/copyFrom` answer *"Resource not found for the
+segment"* against this workbook — the same limitation as `dataValidation` and
+`freezePanes`. Hence one request per cell, which is why the capture takes ~45s
+per tab.
+
+It is idempotent, refuses rather than silently drops if a column past the schema
+holds data, proves by SyncID that each row landed where it thinks before copying
+any colour onto it, and never deletes: `--archive` renames the original to
+`Missing Info (old)` and hides it, still holding every row exactly as it stood.
 
 Each new tab needs the same two settings Graph refuses to make — the `Resolved`
 dropdown and a frozen header row. The script prints the reminder.

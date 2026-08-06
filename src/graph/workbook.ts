@@ -351,6 +351,25 @@ export class Workbook {
     return { color: color === '' ? undefined : color };
   }
 
+  /**
+   * The font colour of a range, or `undefined` when the cells do not agree.
+   *
+   * Same contract as `getFill` and needed for the same reason: text colour
+   * carries meaning on these tabs too — a `Medicaid #` reading `inactive` in red
+   * is staff saying something — and `planQueueStyle` would paint the whole body
+   * black. See `scripts/split-queue.ts`.
+   */
+  async getFontColor(sheetName: string, address: string): Promise<{ color: string | undefined }> {
+    const result = await this.withSession(() =>
+      this.graph.request<{ color?: string | null }>(
+        `${worksheetPath(this.workbookPath, sheetName)}/range(address='${encodeURIComponent(address)}')/format/font?$select=color`,
+        { headers: this.sessionHeaders },
+      ),
+    );
+    const color = typeof result.color === 'string' ? result.color.trim() : '';
+    return { color: color === '' ? undefined : color };
+  }
+
   /** Adds an empty worksheet. Fails if the name is already taken. */
   async addWorksheet(name: string): Promise<void> {
     await this.withSession(() =>

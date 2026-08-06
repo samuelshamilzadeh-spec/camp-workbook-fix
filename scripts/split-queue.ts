@@ -12,14 +12,24 @@
  *
  * Three things shape how this is done.
  *
- * **Every fill on these tabs is derived, so it is regenerated rather than
- * copied.** The red is `BLANK_REQUIRED_FILL` on a blank required field; the
- * bands are camp dividers and the TOTAL; the bar is the header. All of it comes
- * out of `REQUIRED_FIELDS` and `planQueueStyle`, so re-deriving it on the
- * destination reproduces the source exactly — and costs four Graph calls per tab
- * instead of one per cell. What that would miss is anything a person coloured by
- * hand, so the run does not assume: it PROBES the source tab's fills first and
- * refuses to write if it finds one the rules do not predict.
+ * **Fills are COPIED, cell by cell, never re-derived.** The first version of this
+ * script regenerated them from `REQUIRED_FIELDS` and `planQueueStyle`, on the
+ * reasoning that every fill on these tabs came from those rules in the first
+ * place. Auditing the live tab disproved it: 570 cells carry a colour the rules
+ * know nothing about — amber in `Date of Visit`, orange in `Medications`, purple
+ * in `Allergies`, green across the three insurance columns — which is staff
+ * colour-coding built up by hand. Regenerating would have erased all of it.
+ *
+ * So the source tab's fills are read cell by cell and replayed onto the new tab
+ * at the row each patient landed on. Nothing is added: a blank required field
+ * that is not shaded today does not become shaded, because what is on the sheet
+ * now is what goes. `planQueueStyle` still supplies the fonts, borders, column
+ * widths, row heights and number formats, which it reproduces exactly — its fill
+ * operations are dropped, since the copied fills are the truth.
+ *
+ * Excel's own copy would be better than any of this, and Graph refuses it: both
+ * `worksheets/copy` and `range/copyFrom` answer "Resource not found for the
+ * segment", the same way `dataValidation` and `freezePanes` do on this workbook.
  *
  * **The move is idempotent.** A row whose SyncID is already on the destination is
  * skipped, and an unstamped row already there is matched on identity the same
@@ -33,29 +43,25 @@
  */
 
 import {
+  BLANK_REQUIRED_FILL,
   LAYOUT,
   QUEUE_SHEET_TABS,
-  REQUIRED_FIELDS,
   SEGMENTS,
   SPLIT_FAMILIES,
   STYLE,
   assertLayoutVerified,
-  familyOf,
   loadConfig,
-  queueColumnsFor,
   queueTabFor,
-  type QueueColumn,
   type QueueSheetName,
   type Segment,
   type SplitFamily,
 } from '../src/config';
-import { BLANK_REQUIRED_FILL } from '../src/config';
 import { planQueueAppend } from '../src/domain/append';
 import {
   columnToIndex,
   indexToColumn,
   isBlank,
-  offsetColumn,
+  parseAddress,
   rangeAddress,
 } from '../src/domain/cells';
 import { mapWithConcurrency } from '../src/domain/concurrency';
@@ -98,199 +104,233 @@ function resolveFamily(wanted: string): SplitFamily {
   return match;
 }
 
-// --- The fill audit ---------------------------------------------------------
+// --- Capturing the fills ----------------------------------------------------
 
 /**
- * A range whose colour the style rules can predict, and what they predict.
+ * Every filled cell on a tab, keyed `row!COLUMN`.
  *
- * `expected: undefined` means "no fill". An unfilled cell reads back as white,
- * and nothing in `STYLE` ever deliberately fills a cell white, so the two are
- * treated as the same thing.
+ * Colours are read rather than derived because the live tabs carry a colour
+ * scheme this codebase did not put there and cannot predict. See the header
+ * comment: 570 cells on `Missing Info` alone.
  */
-interface FillProbe {
-  address: string;
-  row: number;
-  firstColumn: string;
-  lastColumn: string;
-  expected: string | undefined;
-  what: string;
-}
+export type FillMap = Map<string, string>;
 
-interface FillFinding {
-  address: string;
-  what: string;
-  expected: string;
-  found: string;
-}
+const DEFAULT = 'default';
 
-const NO_FILL = 'none';
-
-function normalizeColor(color: string | undefined): string {
-  if (!color) return NO_FILL;
+/**
+ * What counts as "no colour here", per property.
+ *
+ * An unfilled cell reads back as white and nothing ever deliberately fills white,
+ * so for a FILL those are the same thing. For a FONT the default is black, and
+ * an explicit black is likewise indistinguishable from — and equivalent to — no
+ * colour at all.
+ */
+function normalizeColor(color: string | undefined, kind: 'fill' | 'font'): string {
+  if (!color) return DEFAULT;
   const upper = color.trim().toUpperCase();
-  return upper === '#FFFFFF' || upper === 'FFFFFF' ? NO_FILL : upper;
+  const neutral = kind === 'fill' ? ['#FFFFFF', 'FFFFFF'] : ['#000000', '000000'];
+  return neutral.includes(upper) ? DEFAULT : upper;
 }
 
-/**
- * Every range on the source tab whose colour is predictable, in probe order.
- *
- * A patient row is cut into runs of "should be red" and "should be plain" rather
- * than probed cell by cell: a row with no blank required fields is one call, and
- * the usual one-or-two-blanks row is three. Probing all 18 cells of 195 rows
- * would be 3,500 calls to answer a question three usually settles.
- */
-function planFillProbes(sheet: ParsedQueueSheet): FillProbe[] {
-  const columns = queueColumnsFor(sheet.sheet);
-  const required = REQUIRED_FIELDS[familyOf(sheet.sheet)];
-  const first = LAYOUT.queue.firstColumn;
-  const last = lastQueueColumnLetter(sheet.sheet);
-  const probes: FillProbe[] = [];
-
-  const add = (row: number, from: number, to: number, expected: string | undefined, what: string) => {
-    const firstColumn = offsetColumn(first, from);
-    const lastColumn = offsetColumn(first, to);
-    probes.push({
-      address: rangeAddress(firstColumn, row, lastColumn, row),
-      row,
-      firstColumn,
-      lastColumn,
-      expected,
-      what,
-    });
-  };
-
-  probes.push({
-    address: rangeAddress(first, sheet.headerRow, last, sheet.headerRow),
-    row: sheet.headerRow,
-    firstColumn: first,
-    lastColumn: last,
-    expected: STYLE.headerFill,
-    what: 'header bar',
-  });
-
-  for (const group of sheet.groups) {
-    probes.push({
-      address: rangeAddress(first, group.headerRow, last, group.headerRow),
-      row: group.headerRow,
-      firstColumn: first,
-      lastColumn: last,
-      expected: STYLE.dividerFill,
-      what: `divider band: ${group.camp}`,
-    });
-  }
-
-  if (sheet.totalRow !== undefined) {
-    probes.push({
-      address: rangeAddress(first, sheet.totalRow, last, sheet.totalRow),
-      row: sheet.totalRow,
-      firstColumn: first,
-      lastColumn: last,
-      expected: STYLE.totalFill,
-      what: 'total row',
-    });
-  }
-
-  for (const row of sheet.rows) {
-    // Which of this row's cells the rules say are red, as column indexes.
-    const red = new Set<number>();
-    for (const field of required) {
-      if (!isBlank(row.values[field])) continue;
-      const index = columns.indexOf(field as QueueColumn);
-      if (index !== -1) red.add(index);
-    }
-
-    // Walk the row, emitting one probe per run of same-expectation cells.
-    let runStart = 0;
-    for (let index = 1; index <= columns.length; index++) {
-      const same = index < columns.length && red.has(index) === red.has(runStart);
-      if (same) continue;
-      const isRed = red.has(runStart);
-      add(
-        row.row,
-        runStart,
-        index - 1,
-        isRed ? BLANK_REQUIRED_FILL : undefined,
-        isRed ? 'blank required (red)' : 'patient cells (plain)',
-      );
-      runStart = index;
-    }
-  }
-
-  return probes;
-}
+const fillKey = (row: number, column: string): string => `${row}!${column}`;
 
 /**
- * Probes the planned ranges and reports every fill the rules do not predict.
+ * Reads the fill of every cell in the tab's data columns.
  *
- * A multi-cell range whose cells disagree comes back with no colour, which for a
- * range means "mixed" and for a single cell means "unfilled". So a mixed answer
- * is not a finding, it is an instruction to look closer: the run is re-probed one
- * cell at a time, where the answer is unambiguous.
+ * Graph has no call that returns a grid of formats — `cellProperties` is not
+ * exposed, and `copyFrom` is refused — so this is one request per cell in the
+ * worst case. It is kept to roughly one per ROW in the common case by asking
+ * about the whole row first: Graph answers a multi-cell range with a colour only
+ * when every cell agrees, so a uniformly unfilled row costs a single call and
+ * only a row that actually varies is opened up.
+ *
+ * A null answer means "they disagree" for a range and "no fill" for a single
+ * cell, which is why the second pass is per cell, where the reading is
+ * unambiguous.
  */
-async function auditFills(
+async function readColors(
   workbook: Workbook,
   tab: string,
-  sheet: ParsedQueueSheet,
+  rows: readonly number[],
+  firstColumn: string,
+  lastColumn: string,
   concurrency: number,
-): Promise<{ findings: FillFinding[]; probes: number }> {
-  /** Splits a multi-cell probe into one probe per cell, same expectation. */
-  const cellsOf = (probe: FillProbe): FillProbe[] => {
-    const from = columnToIndex(probe.firstColumn);
-    const to = columnToIndex(probe.lastColumn);
-    const cells: FillProbe[] = [];
-    for (let index = from; index <= to; index++) {
-      const letter = indexToColumn(index);
-      cells.push({
-        ...probe,
-        address: rangeAddress(letter, probe.row, letter, probe.row),
-        firstColumn: letter,
-        lastColumn: letter,
-      });
-    }
-    return cells;
-  };
+  kind: 'fill' | 'font',
+): Promise<{ colors: FillMap; calls: number }> {
+  const colors: FillMap = new Map();
+  const from = columnToIndex(firstColumn);
+  const to = columnToIndex(lastColumn);
+  const read = (address: string) =>
+    kind === 'fill' ? workbook.getFill(tab, address) : workbook.getFontColor(tab, address);
 
-  const isRange = (probe: FillProbe): boolean => probe.firstColumn !== probe.lastColumn;
+  const wholeRows = await mapWithConcurrency(rows, concurrency, (row) =>
+    read(rangeAddress(firstColumn, row, lastColumn, row)),
+  );
 
-  const check = async (probe: FillProbe): Promise<{ color: string | undefined }> =>
-    workbook.getFill(tab, probe.address);
-
-  const verdict = (probe: FillProbe, color: string | undefined): FillFinding | undefined => {
-    const found = normalizeColor(color);
-    const expected = normalizeColor(probe.expected);
-    return found === expected
-      ? undefined
-      : { address: probe.address, what: probe.what, expected, found };
-  };
-
-  // Pass one: every planned range. A range whose cells disagree answers with no
-  // colour at all, which is not a finding — it is an instruction to look closer.
-  const planned = planFillProbes(sheet);
-  const firstPass = await mapWithConcurrency(planned, concurrency, check);
-
-  const findings: FillFinding[] = [];
-  const mixed: FillProbe[] = [];
-  planned.forEach((probe, index) => {
-    const color = firstPass[index]!.color;
-    if (color === undefined && isRange(probe)) {
-      mixed.push(probe);
+  const mixed: number[] = [];
+  rows.forEach((row, index) => {
+    if (wholeRows[index]!.color === undefined) {
+      // Either the whole row is default or its cells disagree. Both are possible
+      // and indistinguishable at range width, so look closer.
+      mixed.push(row);
       return;
     }
-    const finding = verdict(probe, color);
-    if (finding) findings.push(finding);
+    const color = normalizeColor(wholeRows[index]!.color, kind);
+    if (color === DEFAULT) return;
+    for (let index2 = from; index2 <= to; index2++) {
+      colors.set(fillKey(row, indexToColumn(index2)), color);
+    }
   });
 
-  // Pass two: the disagreeing ranges, one cell at a time. Done as a second pass
-  // rather than by recursing inside the first, so the number of requests in
-  // flight stays bounded by `concurrency` instead of squaring it.
-  const cells = mixed.flatMap(cellsOf);
-  const secondPass = await mapWithConcurrency(cells, concurrency, check);
-  cells.forEach((probe, index) => {
-    const finding = verdict(probe, secondPass[index]!.color);
-    if (finding) findings.push(finding);
+  const cells: { row: number; column: string }[] = [];
+  for (const row of mixed) {
+    for (let index = from; index <= to; index++) {
+      cells.push({ row, column: indexToColumn(index) });
+    }
+  }
+
+  const perCell = await mapWithConcurrency(cells, concurrency, (cell) =>
+    read(rangeAddress(cell.column, cell.row, cell.column, cell.row)),
+  );
+  cells.forEach((cell, index) => {
+    const color = normalizeColor(perCell[index]!.color, kind);
+    if (color !== DEFAULT) colors.set(fillKey(cell.row, cell.column), color);
   });
 
-  return { findings, probes: planned.length + cells.length };
+  return { colors, calls: rows.length + cells.length };
+}
+
+/** What the fills look like, for the dry-run report. Colours only, never values. */
+function summarizeFills(fills: FillMap): { color: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const color of fills.values()) counts.set(color, (counts.get(color) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([color, count]) => ({ color, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Groups a row's filled cells into contiguous same-colour runs, so three green
+ * insurance columns are one `setFill` rather than three.
+ */
+function fillRuns(
+  fills: FillMap,
+  sourceRow: number,
+  destinationRow: number,
+  firstColumn: string,
+  lastColumn: string,
+): { address: string; color: string }[] {
+  const from = columnToIndex(firstColumn);
+  const to = columnToIndex(lastColumn);
+  const runs: { address: string; color: string }[] = [];
+
+  let start: number | undefined;
+  let color: string | undefined;
+
+  const close = (end: number) => {
+    if (start === undefined || color === undefined) return;
+    runs.push({
+      address: rangeAddress(indexToColumn(start), destinationRow, indexToColumn(end), destinationRow),
+      color,
+    });
+    start = undefined;
+    color = undefined;
+  };
+
+  for (let index = from; index <= to; index++) {
+    const here = fills.get(fillKey(sourceRow, indexToColumn(index)));
+    if (here !== color) {
+      close(index - 1);
+      if (here !== undefined) {
+        start = index;
+        color = here;
+      }
+    }
+  }
+  close(to);
+
+  return runs;
+}
+
+// --- How wide the tab really is ---------------------------------------------
+
+/**
+ * The SyncID column and everything right of it. Never part of the copied width:
+ * BA is written separately by the appender, and past it lies whatever debris a
+ * script has left — `Missing Info` still carries a `sync-probe` header out at CA
+ * from a concurrency run in July.
+ */
+const isBeyondData = (column: string, layout = LAYOUT): boolean =>
+  columnToIndex(column) >= columnToIndex(layout.queue.syncIdColumn);
+
+/**
+ * Columns to the right of the schema that the sheet actually uses.
+ *
+ * `QUEUE_COLUMNS` describes A..R and these tabs are wider than that. Anything
+ * out there holding a HEADER is carried across; anything holding DATA stops the
+ * run, because `planQueueAppend` writes the schema's columns and would drop it.
+ */
+function extraColumns(
+  sheet: ParsedQueueSheet,
+  used: { address: string; values: unknown[][] },
+): { lastColumn: string | undefined; labels: string[]; withData: string[] } {
+  const { startRow, startColumn } = parseAddress(used.address);
+  const schemaLast = columnToIndex(lastQueueColumnLetter(sheet.sheet));
+  const width = used.values.reduce((max, row) => Math.max(max, row.length), 0);
+  const offset = columnToIndex(startColumn);
+
+  const labels: string[] = [];
+  const withData: string[] = [];
+  let last: number | undefined;
+
+  for (let index = 0; index < width; index++) {
+    const column = indexToColumn(offset + index);
+    if (offset + index <= schemaLast || isBeyondData(column)) continue;
+
+    const header = used.values[sheet.headerRow - startRow]?.[index];
+    const label = String(header ?? '').trim();
+
+    let filled = false;
+    for (const row of sheet.rows) {
+      const value = used.values[row.row - startRow]?.[index];
+      if (!isBlank(value)) {
+        filled = true;
+        break;
+      }
+    }
+
+    if (filled) withData.push(`${column} (${label || 'unlabelled'})`);
+    if (label || filled) {
+      labels.push(`${column} "${label}"`);
+      last = offset + index;
+    }
+  }
+
+  return {
+    lastColumn: last === undefined ? undefined : indexToColumn(last),
+    labels,
+    withData,
+  };
+}
+
+/** The source tab's own header row, so labels the schema lacks travel with it. */
+function headerValues(
+  sheet: ParsedQueueSheet,
+  used: { address: string; values: unknown[][] },
+  lastColumn: string,
+): unknown[] {
+  const { startRow, startColumn } = parseAddress(used.address);
+  const from = columnToIndex(LAYOUT.queue.firstColumn);
+  const to = columnToIndex(lastColumn);
+  const row = used.values[sheet.headerRow - startRow] ?? [];
+  const offset = columnToIndex(startColumn);
+
+  const values: unknown[] = [];
+  for (let index = from; index <= to; index++) {
+    const cell = row[index - offset];
+    values.push(cell === undefined || cell === '' ? null : cell);
+  }
+  return values;
 }
 
 // --- Moving the rows --------------------------------------------------------
@@ -298,10 +338,11 @@ async function auditFills(
 /**
  * A source row as something the appender can write.
  *
- * `blankRequired` is recomputed rather than carried across, because it is what
- * reproduces the red shading on the destination and it must describe the row as
- * it is NOW — a field somebody filled in since the shading was applied should
- * arrive unshaded.
+ * `blankRequired` is deliberately EMPTY, which turns off the appender's own red
+ * shading. This is a migration, not a new row: whatever colour the cell carries
+ * today is copied across afterwards, and a blank required field that nobody
+ * shaded stays unshaded. Letting the appender add its red here would paint 84
+ * cells on `Missing Info` alone that the office never had.
  *
  * A row with no SyncID keeps none: `''` writes an empty cell, so it lands on the
  * new tab exactly as unstamped as it left, and shows up in the same orphan
@@ -309,7 +350,6 @@ async function auditFills(
  * row nothing had matched it to.
  */
 function toIntent(row: QueueRow, destination: QueueSheetName): AppendQueueRowIntent {
-  const required = REQUIRED_FIELDS[familyOf(destination)];
   return {
     kind: 'append-queue-row',
     destination,
@@ -318,7 +358,7 @@ function toIntent(row: QueueRow, destination: QueueSheetName): AppendQueueRowInt
     sourceRow: Number(row.values['Source Row'] ?? 0),
     camp: row.camp,
     values: row.values,
-    blankRequired: required.filter((field) => isBlank(row.values[field])),
+    blankRequired: [],
   };
 }
 
@@ -391,13 +431,9 @@ async function main(): Promise<void> {
   const wanted = args.find((arg) => !arg.startsWith('--'));
   const apply = args.includes('--apply');
   const archive = args.includes('--archive');
-  const ignoreFills = args.includes('--ignore-unexpected-fills');
 
   if (!wanted) {
-    throw new Error(
-      'Usage: npm run split -- "Missing Info" [--apply] [--archive] ' +
-        '[--ignore-unexpected-fills]',
-    );
+    throw new Error('Usage: npm run split -- "Missing Info" [--apply] [--archive]');
   }
   const family = resolveFamily(wanted);
 
@@ -430,12 +466,38 @@ async function main(): Promise<void> {
     // column list and required fields come out right for a tab that predates
     // the split.
     const sourceName = queueTabFor(family, undefined);
-    const source = parseQueueSheet(sourceName, await workbook.getUsedRange(sourceTab));
+    const sourceUsed = await workbook.getUsedRange(sourceTab);
+    const source = parseQueueSheet(sourceName, sourceUsed);
     if (!source.shapeDetected) {
       throw new Error(
         `Could not find the header row on "${sourceTab}". Refusing to move rows off a ` +
           'sheet whose shape has not been read off the sheet itself.',
       );
+    }
+
+    // How far right to copy.
+    //
+    // The schema stops at R, and these tabs do not: `Ineligible & Inactive`
+    // carries `Updated Insurance Carrier`, `Updated Insurance ID #` and
+    // `Updated Medicaid #` at S, T and U. They hold no data today, and copying
+    // only A..R would drop them the day somebody uses one — so the width is
+    // measured off the sheet instead of taken from the config.
+    const extra = extraColumns(source, sourceUsed);
+    const copyLastColumn =
+      extra.lastColumn ?? lastQueueColumnLetter(sourceName);
+
+    if (extra.withData.length > 0) {
+      // Values for these are not carried: `planQueueAppend` writes the schema's
+      // columns and nothing else. Rather than drop them quietly, stop.
+      throw new Error(
+        `"${sourceTab}" has data in ${extra.withData.join(', ')}, which are past the ` +
+          `columns this migration knows how to move (A..${lastQueueColumnLetter(sourceName)}). ` +
+          'Add them to QUEUE_COLUMNS, or clear them, before splitting this tab.',
+      );
+    }
+    if (extra.labels.length > 0) {
+      out();
+      out(`  columns past the schema, carried as headers only (all empty): ${extra.labels.join(', ')}`);
     }
 
     const buckets = bucketBySegment(source);
@@ -471,28 +533,62 @@ async function main(): Promise<void> {
       }
     }
 
-    // --- The fill audit ------------------------------------------------------
-    out();
-    out('Auditing the source tab\'s fills against the style rules...');
-    const audit = await auditFills(workbook, sourceTab, source, config.readConcurrency);
-    out(`  ${audit.probes} range(s) probed, ${audit.findings.length} unexpected`);
+    // --- Capture every colour on the tab -------------------------------------
+    const captureRows = [
+      source.headerRow,
+      ...source.groups.map((group) => group.headerRow),
+      ...source.rows.map((row) => row.row),
+      ...(source.totalRow === undefined ? [] : [source.totalRow]),
+    ].sort((a, b) => a - b);
 
-    if (audit.findings.length > 0) {
-      out();
-      out('  UNEXPECTED FILLS — these are colours the style rules do not predict,');
-      out('  so regenerating the styling on the new tabs would NOT reproduce them:');
-      for (const finding of audit.findings.slice(0, 40)) {
-        out(
-          `    ${finding.address.padEnd(12)} ${finding.what.padEnd(24)} ` +
-            `expected ${finding.expected}, found ${finding.found}`,
-        );
-      }
-      if (audit.findings.length > 40) {
-        out(`    ... and ${audit.findings.length - 40} more`);
-      }
+    const describe = (color: string): string =>
+      color === STYLE.headerFill.toUpperCase()
+        ? '  (header bar)'
+        : color === STYLE.dividerFill.toUpperCase()
+          ? '  (camp divider band)'
+          : color === STYLE.totalFill.toUpperCase()
+            ? '  (total row)'
+            : color === BLANK_REQUIRED_FILL.toUpperCase()
+              ? '  (blank required, the office red)'
+              : '';
+
+    out();
+    out('Reading every colour on the source tab (Graph has no bulk format read)...');
+
+    const fills = await readColors(
+      workbook,
+      sourceTab,
+      captureRows,
+      LAYOUT.queue.firstColumn,
+      copyLastColumn,
+      config.readConcurrency,
+      'fill',
+    );
+    out(`  fills: ${fills.calls} request(s), ${fills.colors.size} coloured cells`);
+    for (const { color, count } of summarizeFills(fills.colors)) {
+      out(`    ${String(count).padStart(5)}  ${color}${describe(color)}`);
     }
 
-    const blocked = audit.findings.length > 0 && !ignoreFills;
+    // Text colour matters here too. `Medicaid #` reading `inactive` in red is a
+    // staff member saying something, and `planQueueStyle` paints the whole body
+    // black — so the non-black ones are captured and put back after it runs.
+    const fonts = await readColors(
+      workbook,
+      sourceTab,
+      captureRows,
+      LAYOUT.queue.firstColumn,
+      copyLastColumn,
+      config.readConcurrency,
+      'font',
+    );
+    out(`  font colours: ${fonts.calls} request(s), ${fonts.colors.size} non-black cells`);
+    for (const { color, count } of summarizeFills(fonts.colors)) {
+      out(`    ${String(count).padStart(5)}  ${color}${color === STYLE.headerFont.toUpperCase() ? '  (header text)' : ''}`);
+    }
+
+    out('  Every one of these is copied to the new tabs as-is. Nothing is added,');
+    out('  nothing is re-derived.');
+
 
     // --- Plan the move -------------------------------------------------------
     const moves: {
@@ -500,6 +596,7 @@ async function main(): Promise<void> {
       destination: QueueSheetName;
       tab: string;
       exists: boolean;
+      rows: QueueRow[];
       intents: AppendQueueRowIntent[];
       skipped: number;
     }[] = [];
@@ -517,19 +614,18 @@ async function main(): Promise<void> {
       const tab = QUEUE_SHEET_TABS[destination];
       const existingTab = resolveSheetName(tab, names);
 
-      let intents = rows.map((row) => toIntent(row, destination));
+      let keep = rows;
       let skipped = 0;
 
       if (existingTab) {
         const parsed = parseQueueSheet(destination, await workbook.getUsedRange(existingTab));
         const { ids, identities } = alreadyThere(parsed);
-        const before = intents.length;
-        intents = intents.filter((intent) => {
-          if (intent.syncId && ids.has(intent.syncId)) return false;
-          const key = identityKey(intent.values);
+        keep = rows.filter((row) => {
+          if (row.syncId && ids.has(row.syncId)) return false;
+          const key = identityKey(row.values);
           return !(key && identities.has(key));
         });
-        skipped = before - intents.length;
+        skipped = rows.length - keep.length;
       }
 
       moves.push({
@@ -537,7 +633,8 @@ async function main(): Promise<void> {
         destination,
         tab,
         exists: existingTab !== undefined,
-        intents,
+        rows: keep,
+        intents: keep.map((row) => toIntent(row, destination)),
         skipped,
       });
     }
@@ -553,36 +650,23 @@ async function main(): Promise<void> {
 
     if (!apply) {
       out();
-      if (blocked) {
-        out('DRY RUN — and it would REFUSE to write: the fills above are not ones the');
-        out('style rules can regenerate. Decide what they mean, then either clear them');
-        out('or re-run with --ignore-unexpected-fills to move the rows anyway.');
-      } else {
-        out('DRY RUN — nothing written. Re-run with --apply.');
-      }
+      out('DRY RUN — nothing written. Re-run with --apply.');
       return;
-    }
-
-    if (blocked) {
-      throw new Error(
-        `Refusing to move rows off "${sourceTab}": ${audit.findings.length} cell range(s) ` +
-          'carry a fill the style rules do not predict, so the new tabs would not ' +
-          'reproduce them. Re-run with --ignore-unexpected-fills once you have decided ' +
-          'what they mean.',
-      );
     }
 
     // --- Move ----------------------------------------------------------------
     //
-    // The column list is a property of the family, so it is the same on every one
-    // of its monthly tabs and can be taken from the source's own name.
-    const columns = queueColumnsFor(sourceName);
+    // The header row is copied from the SOURCE rather than written from the
+    // configured column list, so labels the schema does not know about —
+    // `Ineligible & Inactive` carries `Updated Insurance Carrier` and two more at
+    // S, T and U — arrive on the new tab intact.
     const headerAddress = rangeAddress(
       LAYOUT.queue.firstColumn,
       LAYOUT.queue.headerRow,
-      lastQueueColumnLetter(sourceName),
+      copyLastColumn,
       LAYOUT.queue.headerRow,
     );
+    const sourceHeader = headerValues(source, sourceUsed, copyLastColumn);
 
     for (const move of moves) {
       out();
@@ -590,25 +674,52 @@ async function main(): Promise<void> {
 
       if (!move.exists) {
         await workbook.addWorksheet(move.tab);
-        await workbook.writeRange(move.tab, headerAddress, [columns as unknown as unknown[]]);
-        out(`created, header written to ${headerAddress}`);
+        await workbook.writeRange(move.tab, headerAddress, [sourceHeader]);
+        out(`created, header copied to ${headerAddress}`);
       }
 
-      if (move.intents.length === 0 && move.exists) {
-        out('nothing to move.');
-        continue;
+      // The header row's own colours, so the new tab's bar matches the old one.
+      for (const run of fillRuns(fills.colors, source.headerRow, LAYOUT.queue.headerRow, LAYOUT.queue.firstColumn, copyLastColumn)) {
+        await workbook.setFill(move.tab, run.address, run.color);
       }
+      for (const run of fillRuns(fonts.colors, source.headerRow, LAYOUT.queue.headerRow, LAYOUT.queue.firstColumn, copyLastColumn)) {
+        await workbook.setFont(move.tab, run.address, { color: run.color });
+      }
+
+      const dressWithoutFills = async (sheet: ParsedQueueSheet): Promise<number> => {
+        // Fonts, borders, widths, row heights and number formats are regenerated
+        // — `planQueueStyle` reproduces those exactly, because migrate applied
+        // them from these same rules. Its FILL operations are dropped: the
+        // copied fills are the truth, and re-deriving them is what would have
+        // erased the office's colour coding.
+        const operations = planQueueStyle({ sheet }).operations.filter(
+          (operation) => operation.kind !== 'fill',
+        );
+        for (const operation of operations) {
+          try {
+            await applyStyle(workbook, move.tab, operation);
+          } catch (error) {
+            // Graph echoes a failed range payload back, and the logger drops
+            // error bodies for exactly that reason — so a bare 400 says nothing
+            // about which of seventy-odd calls failed. The operation's own
+            // description is safe to print and is what makes this diagnosable.
+            out(`FAILED on style op: ${operation.kind} ${operation.address} — ${operation.what}`);
+            throw error;
+          }
+        }
+        return operations.length;
+      };
 
       if (move.intents.length === 0) {
-        // A month with no rows yet. It still gets dressed, because an undressed
-        // tab sitting beside styled ones is exactly the moment a queue looks
-        // broken to somebody opening it — and because the rows will come.
-        const bare = parseQueueSheet(move.destination, await workbook.getUsedRange(move.tab));
-        const style = planQueueStyle({ sheet: bare });
-        for (const operation of style.operations) {
-          await applyStyle(workbook, move.tab, operation);
+        if (move.exists) {
+          out('nothing to move.');
+          continue;
         }
-        out(`no rows for this month yet; styled with ${style.operations.length} operations`);
+        // A month with no rows yet. It still gets dressed, because an undressed
+        // tab beside styled ones is the moment a queue looks broken to somebody
+        // opening it — and because the rows will come.
+        const bare = parseQueueSheet(move.destination, await workbook.getUsedRange(move.tab));
+        out(`no rows for this month yet; styled with ${await dressWithoutFills(bare)} operations`);
         continue;
       }
 
@@ -621,10 +732,7 @@ async function main(): Promise<void> {
         newBlockOrder: 'as-given',
       });
 
-      out(
-        `${plan.appended} rows into ${plan.placements.length} camp blocks, ` +
-          `${plan.rowsAdded} rows written, ${plan.shadedCells} cells shaded`,
-      );
+      out(`${plan.appended} rows into ${plan.placements.length} camp blocks`);
 
       for (const operation of plan.operations) {
         switch (operation.kind) {
@@ -635,70 +743,96 @@ async function main(): Promise<void> {
             await workbook.writeRange(move.tab, operation.address, operation.values);
             break;
           case 'shade':
+            // Never reached: `toIntent` sends no blankRequired, so the appender
+            // plans no shading. Fills come from the source, not from a rule.
             await workbook.setFill(move.tab, operation.address, operation.color);
             break;
         }
       }
 
-      // --- Verify before anything is retired --------------------------------
+      // --- Verify, and learn where every row landed --------------------------
       const after = parseQueueSheet(move.destination, await workbook.getUsedRange(move.tab));
-      const landed = alreadyThere(after);
 
-      // A row with neither a SyncID nor enough of a name to key on cannot be
-      // looked for by identity — that is what "too little identity" means, and
-      // it is the same reason adoption could not link it. Counted and reported
-      // rather than quietly passed, so the verification never claims more than
-      // it checked.
-      let unverifiable = 0;
-      const missing = move.intents.filter((intent) => {
-        if (intent.syncId) return !landed.ids.has(intent.syncId);
-        const key = identityKey(intent.values);
-        if (!key) {
-          unverifiable++;
-          return false;
-        }
-        return !landed.identities.has(key);
-      });
-
-      if (missing.length > 0) {
+      if (after.rows.length !== move.rows.length) {
         throw new Error(
-          `${missing.length} of ${move.intents.length} rows did not land on "${move.tab}". ` +
-            'The source tab has NOT been touched — re-run to finish the move.',
+          `"${move.tab}" holds ${after.rows.length} rows but ${move.rows.length} were moved. ` +
+            'The source tab has NOT been touched — look at the tab before re-running.',
         );
+      }
+
+      // Positional, then PROVEN by SyncID rather than assumed. The appender
+      // preserves the order it was given and `parseQueueSheet` returns rows in
+      // sheet order, so row i out is row i in — but the fill replay depends on
+      // that mapping being exactly right, and a silently wrong one would paint
+      // one patient's colours onto another.
+      let proven = 0;
+      const rowMap = new Map<number, number>();
+      move.rows.forEach((sourceRow, index) => {
+        const destinationRow = after.rows[index]!;
+        if (sourceRow.syncId || destinationRow.syncId) {
+          if (sourceRow.syncId !== destinationRow.syncId) {
+            throw new Error(
+              `Row ${index + 1} on "${move.tab}" is not the row that was written ` +
+                '(SyncID mismatch). Refusing to copy fills onto the wrong patient.',
+            );
+          }
+          proven++;
+        }
+        rowMap.set(sourceRow.row, destinationRow.row);
+      });
+      out(`verified: ${after.rows.length} rows, ${proven} confirmed by SyncID`);
+
+      // Camp dividers, matched by name so the band and any colour on it follow.
+      const destinationGroups = new Map(after.groups.map((group) => [campKey(group.camp), group]));
+      for (const group of source.groups) {
+        const match = destinationGroups.get(campKey(group.camp));
+        if (match) rowMap.set(group.headerRow, match.headerRow);
+      }
+      if (source.totalRow !== undefined && after.totalRow !== undefined) {
+        rowMap.set(source.totalRow, after.totalRow);
+      }
+
+      // --- Dress, THEN replay the colours ------------------------------------
+      //
+      // Order matters. `planQueueStyle` sets the whole body to black Arial 10,
+      // so a captured red `inactive` has to go on after it or the styling pass
+      // would wipe the very thing this is here to preserve.
+      const styled = await dressWithoutFills(after);
+      out(`styled: ${styled} operations (fonts, borders, widths, number formats)`);
+
+      const runsFor = (map: FillMap): { address: string; color: string }[] => {
+        const runs: { address: string; color: string }[] = [];
+        for (const [sourceRow, destinationRow] of rowMap) {
+          runs.push(
+            ...fillRuns(map, sourceRow, destinationRow, LAYOUT.queue.firstColumn, copyLastColumn),
+          );
+        }
+        return runs;
+      };
+
+      const fillWork = runsFor(fills.colors);
+      const fontWork = runsFor(fonts.colors);
+      let painted = 0;
+      const total = fillWork.length + fontWork.length;
+
+      for (const run of fillWork) {
+        await workbook.setFill(move.tab, run.address, run.color);
+        if (++painted % 100 === 0) out(`  ${painted}/${total} colour ranges copied`);
+      }
+      for (const run of fontWork) {
+        await workbook.setFont(move.tab, run.address, { color: run.color });
+        if (++painted % 100 === 0) out(`  ${painted}/${total} colour ranges copied`);
       }
       out(
-        `verified: ${after.rows.length} rows on the tab, ` +
-          `${move.intents.length - unverifiable} of ${move.intents.length} confirmed by ID or identity`,
+        `colours copied: ${fillWork.length} fill range(s) and ${fontWork.length} font range(s), ` +
+          'exactly as they were',
       );
-      if (unverifiable > 0) {
-        out(
-          `  ${unverifiable} row(s) carry neither a SyncID nor a full name and date of birth, ` +
-            'so they were written but could not be looked up afterwards. The row count above ' +
-            'is the check for those.',
-        );
-      }
-
-      // --- Dress it ----------------------------------------------------------
-      const style = planQueueStyle({ sheet: after });
-      for (const operation of style.operations) {
-        try {
-          await applyStyle(workbook, move.tab, operation);
-        } catch (error) {
-          // Graph echoes a failed range payload back, and the logger drops error
-          // bodies for exactly that reason — so a bare 400 says nothing about
-          // which of seventy-odd calls failed. The operation's description is
-          // safe to print and is the only thing that makes this diagnosable.
-          out(`FAILED on style op: ${operation.kind} ${operation.address} — ${operation.what}`);
-          throw error;
-        }
-      }
-      out(`styled: ${style.operations.length} operations`);
 
       log.info('split.moved', {
         sheet: move.tab,
         destination: move.destination,
-        count: move.intents.length,
-        counts: { styled: style.operations.length, shaded: plan.shadedCells },
+        count: move.rows.length,
+        counts: { fills: fillWork.length, fonts: fontWork.length, styled },
       });
     }
 

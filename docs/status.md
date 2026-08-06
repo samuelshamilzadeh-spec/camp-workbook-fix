@@ -14,13 +14,41 @@ sits on; `src/domain/segments.ts` is the only place the two meet. No keyword rul
 was touched, and "wrong month" reuses the existing wrong-queue path rather than
 introducing a second kind of move.
 
-**`npm run split -- "Missing Info"` does the migration** and is dry run by
-default. It will not write while the source tab carries a fill the style rules
-cannot regenerate, because the new tabs are dressed by re-deriving the styling
-rather than by copying cell formats — so an unexplained colour has to be a
-decision, not a silent loss. It is idempotent, verifies every row landed before
-reporting success, and `--archive` retires the original by renaming it
-`... (old)` and hiding it. Nothing is deleted.
+**Done on the live workbook, 2026-08-06.**
+
+    Missing Info           212 rows ->  June 21   July 175   August 16   Other 0
+    Ineligible & Inactive  162 rows ->  June 17   July 145   August  0   Other 0
+
+Every row confirmed by SyncID on arrival, and a full cycle afterwards plans
+nothing — 0 stamps, 0 appends, 0 write-backs, 0 removals across 52 daily sheets.
+The originals are now `Missing Info (old)` and `Ineligible & Inactive (old)`,
+hidden and still holding every row exactly as it stood.
+
+**The colours are copied, not re-derived, and that was the whole lesson.** The
+first version of the script regenerated fills from `REQUIRED_FIELDS` and
+`planQueueStyle`, on the reasoning that every fill on these tabs came from those
+rules. The live tab disproved it: 17 distinct fill colours on `Missing Info`,
+only four of which this codebase knows about — amber and yellow in `Date of
+Visit`, blues in `Source Row`, red note-cells reading `Staff kid`, greens for
+confirmed insurance, orange down `Medications`, purple down `Allergies`. Staff
+built that by hand over a season. Regenerating would have erased all of it, and
+the run that would have done so reported it as an improvement.
+
+Font colour is copied for the same reason — a `Medicaid #` reading `inactive` in
+red is somebody saying something.
+
+Verified afterwards by an independent colour census of source versus destination.
+Every patient-cell colour matched exactly. Three counts differed and all three
+are explained: the header bar and TOTAL row now exist once per tab, a camp with
+patients in two months gets its divider band (and any colour on it) in both, and
+one dark-red cell sat on the `YBH` divider — one of **7 camp headings on the old
+tab that had no patients under them at all**, so there was no block for it to
+move to.
+
+Excel's own copy would have been better than any of this. Graph refuses it: both
+`worksheets/copy` and `range/copyFrom` answer "Resource not found for the
+segment" against this workbook, the same way `dataValidation` and `freezePanes`
+do. Hence one request per cell, ~45s to capture a tab.
 
 Two things still need a person, per new tab: the `Resolved` dropdown and the
 frozen header row. Graph refuses both against this workbook.
