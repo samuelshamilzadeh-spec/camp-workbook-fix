@@ -370,6 +370,29 @@ export class Workbook {
     return { color: color === '' ? undefined : color };
   }
 
+  /**
+   * Moves a worksheet in the tab bar. `position` is a zero-based index over ALL
+   * sheets, hidden ones included.
+   *
+   * **Addressed by id, and that is not a style choice.** The same PATCH naming
+   * the sheet — `worksheets('Missing Info - June')` — returns 200 with the
+   * sheet's entity and leaves `position` exactly as it was. Only the id form
+   * actually moves it. That cost a run which reported four tabs moved while all
+   * eight sat untouched at the end of a 69-sheet workbook, so the caller is
+   * expected to read the positions back rather than trust the 200.
+   *
+   * Setting position removes the sheet and re-inserts it at that index, so a run
+   * of sheets is placed left to right with consecutive targets.
+   */
+  async moveWorksheet(sheetId: string, position: number): Promise<void> {
+    await this.withSession(() =>
+      this.graph.request(
+        `${this.workbookPath}/worksheets${encodeSheet(sheetId)}`,
+        { method: 'PATCH', body: { position }, headers: this.sessionHeaders },
+      ),
+    );
+  }
+
   /** Adds an empty worksheet. Fails if the name is already taken. */
   async addWorksheet(name: string): Promise<void> {
     await this.withSession(() =>
@@ -382,13 +405,16 @@ export class Workbook {
   }
 
   /**
-   * Renames a worksheet and/or changes its visibility.
+   * Renames a worksheet, changes its visibility, or moves it in the tab bar.
    *
    * A rename is a silent outage in this design: `resolveSheetName` reports the
    * old name as absent, the cycle logs `queue.sheet_missing`, and every row bound
    * for it goes nowhere. It happened once already when the office renamed
    * `Missing Info (New)`. So this is only ever used on a tab that has just been
    * emptied and taken out of `QUEUE_SHEET_NAMES` — never on a live one.
+   *
+   * Position is NOT settable here — see `moveWorksheet`, which has to address the
+   * sheet by id because this form silently ignores it.
    */
   async updateWorksheet(
     sheetName: string,

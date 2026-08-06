@@ -846,6 +846,13 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Where the tab sits in the bar, read BEFORE anything moves. The monthly
+    // tabs take this spot: staff have reached for `Missing Info` in the same
+    // place all season, and leaving its replacements stranded at the end of a
+    // 61-sheet workbook is its own kind of broken.
+    const sheets = await workbook.listWorksheets();
+    const anchor = sheets.find((sheet) => sheet.name === sourceTab)?.position;
+
     const archived = `${family} (old)`;
     if (normalizeSheetName(sourceTab) === normalizeSheetName(archived)) {
       out(`"${sourceTab}" is already the archived copy. Nothing to rename.`);
@@ -854,6 +861,53 @@ async function main(): Promise<void> {
       log.info('split.archived', { sheet: sourceTab, renamedTo: archived });
       out(`Renamed ${JSON.stringify(sourceTab)} to ${JSON.stringify(archived)} and hid it.`);
       out('Every row it held is still on it, exactly as it stood before the split.');
+    }
+
+    if (anchor !== undefined) {
+      // Left to right with consecutive targets: setting a position removes the
+      // sheet and re-inserts it there, so each tab lands exactly at its target
+      // and the ones after it shuffle around it.
+      // LAST tab first, every one of them to the SAME index.
+      //
+      // Inserting at an index pushes whatever is there to the right, so placing
+      // Other, then August, then July, then June — all at `anchor` — leaves them
+      // in June, July, August, Other order without this code needing a theory of
+      // what Graph does to the indices in between. Two attempts at being clever
+      // about that failed differently: consecutive targets 3,4,5,6 landed at
+      // 4,6,8,10, and chaining off where each tab actually settled interleaved
+      // them with `Verify Insurance` and two daily sheets.
+      const byName = new Map(sheets.map((sheet) => [sheet.name, sheet]));
+      for (const segment of [...SEGMENTS].reverse()) {
+        const sheet = byName.get(QUEUE_SHEET_TABS[queueTabFor(family, segment)]);
+        if (sheet) await workbook.moveWorksheet(sheet.id, anchor);
+      }
+
+      // Read the order back rather than trust the 200s. The name-addressed form
+      // of this PATCH returns success and moves nothing, which is exactly the
+      // kind of failure that gets reported as a job well done.
+      //
+      // Retried, because the position a read reports right after a move can lag
+      // the truth on this workbook — the first version of this check called four
+      // correctly-placed tabs a failure.
+      let positions: number[] = [];
+      let contiguous = false;
+      for (let attempt = 0; attempt < 3 && !contiguous; attempt++) {
+        const after = await workbook.listWorksheets();
+        positions = SEGMENTS.map(
+          (segment) =>
+            after.find((sheet) => sheet.name === QUEUE_SHEET_TABS[queueTabFor(family, segment)])
+              ?.position,
+        ).filter((position): position is number => position !== undefined);
+        contiguous =
+          positions.length > 0 &&
+          positions.every((value, index) => value === positions[0]! + index);
+      }
+      out(
+        contiguous
+          ? `Moved the ${positions.length} monthly tabs to position ${positions[0]}, where ${JSON.stringify(family)} sat.`
+          : `WARNING: the tabs did not move as asked — they sit at ${positions.join(', ')}. ` +
+            'Drag them into place in Excel.',
+      );
     }
 
     out();
