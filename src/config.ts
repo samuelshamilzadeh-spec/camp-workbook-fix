@@ -204,14 +204,23 @@ export const QUEUE_SHEET_TABS: Record<QueueSheetName, string> = {
   // one tab each; `npm run split` moved their rows onto these and renamed the
   // originals `(old)`, which is why those two names appear in IGNORED_TABS
   // below rather than here.
-  'Missing Info - June': 'Missing Info - June',
-  'Missing Info - July': 'Missing Info - July',
-  'Missing Info - August': 'Missing Info - August',
-  'Missing Info - Other': 'Missing Info - Other',
-  'Ineligible & Inactive - June': 'Ineligible & Inactive - June',
-  'Ineligible & Inactive - July': 'Ineligible & Inactive - July',
-  'Ineligible & Inactive - August': 'Ineligible & Inactive - August',
-  'Ineligible & Inactive - Other': 'Ineligible & Inactive - Other',
+  //
+  // THE PARENTHESES ARE THE OFFICE'S CHOICE and this map is the only place that
+  // knows it. The key is this codebase's internal name for the queue and never
+  // changes; the value is what the tab is actually called. Renaming a tab in
+  // Excel means editing the value here and nothing else — and it means editing
+  // it, because a queue whose tab does not resolve is a silent outage: the cycle
+  // logs `queue.sheet_missing`, the rows on it become invisible, and every
+  // patient bound for it is skipped. That happened twice already, once when
+  // `Missing Info (New)` was renamed and once when these eight were.
+  'Missing Info - June': 'Missing Info (June)',
+  'Missing Info - July': 'Missing Info (July)',
+  'Missing Info - August': 'Missing Info (August)',
+  'Missing Info - Other': 'Missing Info (Other)',
+  'Ineligible & Inactive - June': 'Ineligible & Inactive (June)',
+  'Ineligible & Inactive - July': 'Ineligible & Inactive (July)',
+  'Ineligible & Inactive - August': 'Ineligible & Inactive (August)',
+  'Ineligible & Inactive - Other': 'Ineligible & Inactive (Other)',
 };
 
 /**
@@ -543,6 +552,16 @@ export const LAYOUT: WorkbookLayout = {
     // The monthly tabs. `dailySheetPattern` requires the WHOLE name to be a
     // date so none of these could match it anyway, but a queue tab silently
     // scanned as a daily sheet would be a bad enough failure to list them.
+    // Both spellings, because the dash form was what `npm run split` created
+    // before the office renamed them.
+    'Missing Info (June)',
+    'Missing Info (July)',
+    'Missing Info (August)',
+    'Missing Info (Other)',
+    'Ineligible & Inactive (June)',
+    'Ineligible & Inactive (July)',
+    'Ineligible & Inactive (August)',
+    'Ineligible & Inactive (Other)',
     'Missing Info - June',
     'Missing Info - July',
     'Missing Info - August',
